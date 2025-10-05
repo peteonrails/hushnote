@@ -1,4 +1,4 @@
-#!/home/pete/workspace/transcription/venv/bin/python3
+#!/usr/bin/env python3
 
 """
 Transcription script using faster-whisper

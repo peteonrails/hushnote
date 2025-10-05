@@ -73,11 +73,20 @@ fi
 
 FFMPEG_CMD="$FFMPEG_CMD -ar 16000 -ac 1 -c:a pcm_s16le $OUTPUT_FILE"
 
-# Start recording
+# Start recording (allow CTRL-C to stop gracefully)
+set +e
 eval $FFMPEG_CMD >&2
+ffmpeg_exit_code=$?
+set -e
 
-echo "" >&2
-echo "Recording saved to: $OUTPUT_FILE" >&2
-
-# Output only the filename to stdout (for script capture)
-echo "$OUTPUT_FILE"
+# Always output filename if file was created, even if interrupted
+if [ -f "$OUTPUT_FILE" ]; then
+    echo "" >&2
+    echo "Recording saved to: $OUTPUT_FILE" >&2
+    # Output only the filename to stdout (for script capture)
+    echo "$OUTPUT_FILE"
+else
+    echo "" >&2
+    echo "Error: Recording file was not created" >&2
+    exit 1
+fi

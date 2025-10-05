@@ -11,6 +11,7 @@ WHISPER_MODEL="${WHISPER_MODEL:-base}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.1:8b}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 DEBUG="${DEBUG:-false}"
+PYTHON="${SCRIPT_DIR}/venv/bin/python3"
 
 # Colors for output
 RED='\033[0;31m'
@@ -27,7 +28,12 @@ Commands:
     record              Start recording a meeting
     transcribe FILE     Transcribe an audio file
     summarize FILE      Summarize a transcription
+    diarize FILE        Identify speakers in an audio file
+    label FILE          Label speakers with their names (interactive)
+    apply-labels FILE   Apply speaker labels to create final transcript
     full               Complete workflow: record, transcribe, and summarize
+    process FILE        Process existing recording (transcribe + diarize + summarize)
+    process-last        Process most recent recording (transcribe + diarize + summarize)
     list               List all recordings
 
 Options:
@@ -35,6 +41,8 @@ Options:
     -m, --model MODEL   Whisper model size: tiny, base, small, medium, large-v3 (default: base)
     -o, --ollama MODEL  Ollama model for summarization (default: llama3.1:8b)
     -f, --format FMT    Output format: txt, json, srt, vtt, md (default: txt for transcribe, md for summarize)
+    -s, --speakers NUM  Number of speakers (for diarization)
+    --diarize           Enable speaker diarization in full workflow
     -h, --help          Show this help message
 
 Environment Variables:
@@ -42,6 +50,7 @@ Environment Variables:
     WHISPER_MODEL       Default Whisper model (default: base)
     OLLAMA_MODEL        Default Ollama model (default: llama3.1:8b)
     OLLAMA_URL          Ollama API URL (default: http://localhost:11434)
+    HF_TOKEN            HuggingFace API token (for speaker diarization)
     DEBUG               Enable debug output (set to 'true' to enable)
 
 Examples:
@@ -133,9 +142,20 @@ record_meeting() {
     [ -n "$output_file" ] && record_args+=("-o" "$output_file")
 
     # Run recording and capture output file path
-    output_file=$("${SCRIPT_DIR}/record_audio.sh" "${record_args[@]}")
+    # Use temp file to avoid command substitution exit on CTRL-C
+    local record_result_file="/tmp/hushnote_record_$$"
+    local record_exit_code=0
+
+    "${SCRIPT_DIR}/record_audio.sh" "${record_args[@]}" > "$record_result_file" || record_exit_code=$?
+
+    # Read the output file path
+    if [ -f "$record_result_file" ]; then
+        output_file=$(cat "$record_result_file")
+        rm -f "$record_result_file"
+    fi
 
     # Debug output
+    log_debug "Recording exit code: $record_exit_code"
     log_debug "Captured output_file=[$output_file]"
     log_debug "File exists check: $([ -f "$output_file" ] && echo YES || echo NO)"
 
@@ -184,7 +204,7 @@ transcribe_meeting() {
     log_info "Transcribing audio file: $audio_file"
     log_info "Using Whisper model: $model"
 
-    local cmd="${SCRIPT_DIR}/transcribe.py \"$audio_file\" -m $model -f $format"
+    local cmd="\"$PYTHON\" \"${SCRIPT_DIR}/transcribe.py\" \"$audio_file\" -m $model -f $format"
     [ -n "$output" ] && cmd="$cmd -o \"$output\""
 
     eval $cmd
@@ -236,7 +256,7 @@ summarize_meeting() {
     log_info "Summarizing transcription: $transcription_file"
     log_info "Using Ollama model: $model"
 
-    local cmd="${SCRIPT_DIR}/summarize.py \"$transcription_file\" -m $model -f $format"
+    local cmd="\"$PYTHON\" \"${SCRIPT_DIR}/summarize.py\" \"$transcription_file\" -m $model -f $format"
     [ -n "$output" ] && cmd="$cmd -o \"$output\""
 
     eval $cmd
@@ -259,6 +279,8 @@ full_workflow() {
     local whisper_model="$WHISPER_MODEL"
     local ollama_model="$OLLAMA_MODEL"
     local format=""
+    local enable_diarization=false
+    local num_speakers=""
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -278,68 +300,327 @@ full_workflow() {
                 format="$2"
                 shift 2
                 ;;
+            --diarize)
+                enable_diarization=true
+                shift
+                ;;
+            -s|--speakers)
+                num_speakers="$2"
+                shift 2
+                ;;
             *)
                 shift
                 ;;
         esac
     done
 
-    log_info "Starting full meeting workflow..."
+    if [ "$enable_diarization" = true ]; then
+        log_info "Starting full meeting workflow with speaker diarization..."
+    else
+        log_info "Starting full meeting workflow..."
+    fi
     echo ""
 
     # Step 1: Record
-    log_info "Step 1/3: Recording audio..."
+    log_info "Step 1: Recording audio..."
     local audio_file
+
+    # Record the audio
+    # Use a temporary file to communicate the recording path
+    local recording_result_file="/tmp/hushnote_recording_$$"
+    local recording_exit_code=0
+
     if [ -n "$duration" ]; then
-        audio_file=$(record_meeting -d "$duration")
+        record_meeting -d "$duration" > "$recording_result_file"
+        recording_exit_code=$?
     else
-        audio_file=$(record_meeting)
+        # For open-ended recording, call in a way that captures exit code but continues
+        # The || true prevents set -e from exiting, then we check the actual exit code
+        record_meeting > "$recording_result_file" || recording_exit_code=$?
+
+        log_debug "Recording exit code: $recording_exit_code"
+
+        # If recording was stopped (non-zero exit is expected with CTRL-C)
+        if [ $recording_exit_code -ne 0 ]; then
+            echo "" >&2
+            log_info "Recording stopped. Continuing with processing..." >&2
+            echo "" >&2
+        fi
     fi
+
+    # Read the audio file path from the result file
+    if [ -f "$recording_result_file" ]; then
+        audio_file=$(cat "$recording_result_file")
+        rm -f "$recording_result_file"
+    else
+        audio_file=""
+    fi
+
+    log_debug "Audio file captured: [$audio_file]"
 
     if [ -z "$audio_file" ] || [ ! -f "$audio_file" ]; then
-        log_error "Recording failed"
+        log_error "Recording failed or no audio file was created"
+        log_error "Exit code was: $recording_exit_code"
+        log_error "Audio file variable: [$audio_file]"
         exit 1
     fi
 
     echo ""
 
-    # Step 2: Transcribe
-    log_info "Step 2/3: Transcribing audio..."
-    local transcription_file
-    if [ -n "$whisper_model" ]; then
-        transcription_file=$(transcribe_meeting "$audio_file" -m "$whisper_model")
+    if [ "$enable_diarization" = true ]; then
+        # Diarization workflow: 7 steps
+
+        # Step 2: Diarize
+        log_info "Step 2: Identifying speakers..."
+        local speakers_file
+        if [ -n "$num_speakers" ]; then
+            speakers_file=$(diarize_meeting "$audio_file" -s "$num_speakers")
+        else
+            speakers_file=$(diarize_meeting "$audio_file")
+        fi
+
+        if [ -z "$speakers_file" ] || [ ! -f "$speakers_file" ]; then
+            log_error "Diarization failed"
+            exit 1
+        fi
+
+        echo ""
+
+        # Step 3: Transcribe (as JSON for merging)
+        log_info "Step 3: Transcribing audio..."
+        local base="${audio_file%.*}"
+        local transcription_json="${base}.json"
+
+        "$PYTHON" "${SCRIPT_DIR}/transcribe.py" "$audio_file" -m "$whisper_model" -f json -o "$transcription_json"
+
+        if [ ! -f "$transcription_json" ]; then
+            log_error "Transcription failed"
+            exit 1
+        fi
+
+        echo ""
+
+        # Step 4: Merge diarization + transcription
+        log_info "Step 4: Merging speaker info with transcription..."
+        local diarized_file="${base}_diarized.json"
+
+        "$PYTHON" "${SCRIPT_DIR}/merge_diarization.py" "$speakers_file" "$transcription_json" -o "$diarized_file"
+
+        if [ ! -f "$diarized_file" ]; then
+            log_error "Merge failed"
+            exit 1
+        fi
+
+        echo ""
+
+        # Step 5: Label speakers interactively
+        log_info "Step 5: Label speakers with their names..."
+        echo ""
+
+        # Call label_speakers without command substitution to allow interactive input
+        label_speakers "$diarized_file"
+
+        # Determine output file manually
+        local base="${diarized_file%_diarized.json}"
+        local labeled_file="${base}_speakers_labeled.json"
+
+        if [ ! -f "$labeled_file" ]; then
+            log_error "Labeling failed"
+            exit 1
+        fi
+
+        echo ""
+
+        # Step 6: Apply labels to create final transcript
+        log_info "Step 6: Creating final transcript with speaker names..."
+        local transcription_file=$(apply_speaker_labels "$labeled_file" -f txt)
+
+        if [ -z "$transcription_file" ] || [ ! -f "$transcription_file" ]; then
+            log_error "Apply labels failed"
+            exit 1
+        fi
+
+        echo ""
+
+        # Step 7: Summarize
+        log_info "Step 7: Generating summary..."
+        local summary_file
+        if [ -n "$ollama_model" ]; then
+            summary_file=$(summarize_meeting "$transcription_file" -o "$ollama_model")
+        else
+            summary_file=$(summarize_meeting "$transcription_file")
+        fi
+
+        if [ -z "$summary_file" ] || [ ! -f "$summary_file" ]; then
+            log_error "Summarization failed"
+            exit 1
+        fi
+
+        echo ""
+        log_success "Complete workflow with diarization finished!"
+        echo ""
+        echo "Files generated:"
+        echo "  Audio:          $audio_file"
+        echo "  Diarization:    $speakers_file"
+        echo "  Labeled:        $labeled_file"
+        echo "  Transcription:  $transcription_file"
+        echo "  Summary:        $summary_file"
     else
-        transcription_file=$(transcribe_meeting "$audio_file")
-    fi
+        # Standard workflow without diarization: 3 steps
 
-    if [ -z "$transcription_file" ] || [ ! -f "$transcription_file" ]; then
-        log_error "Transcription failed"
+        # Step 2: Transcribe
+        log_info "Step 2/3: Transcribing audio..."
+        local transcription_file
+        if [ -n "$whisper_model" ]; then
+            transcription_file=$(transcribe_meeting "$audio_file" -m "$whisper_model")
+        else
+            transcription_file=$(transcribe_meeting "$audio_file")
+        fi
+
+        if [ -z "$transcription_file" ] || [ ! -f "$transcription_file" ]; then
+            log_error "Transcription failed"
+            exit 1
+        fi
+
+        echo ""
+
+        # Step 3: Summarize
+        log_info "Step 3/3: Generating summary..."
+        local summary_file
+        if [ -n "$ollama_model" ]; then
+            summary_file=$(summarize_meeting "$transcription_file" -o "$ollama_model")
+        else
+            summary_file=$(summarize_meeting "$transcription_file")
+        fi
+
+        if [ -z "$summary_file" ] || [ ! -f "$summary_file" ]; then
+            log_error "Summarization failed"
+            exit 1
+        fi
+
+        echo ""
+        log_success "Complete workflow finished!"
+        echo ""
+        echo "Files generated:"
+        echo "  Audio:          $audio_file"
+        echo "  Transcription:  $transcription_file"
+        echo "  Summary:        $summary_file"
+    fi
+}
+
+diarize_meeting() {
+    local audio_file="$1"
+    shift
+
+    local speakers=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -s|--speakers)
+                speakers="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [ ! -f "$audio_file" ]; then
+        log_error "Audio file not found: $audio_file"
         exit 1
     fi
 
-    echo ""
+    log_info "Identifying speakers in: $audio_file"
 
-    # Step 3: Summarize
-    log_info "Step 3/3: Generating summary..."
-    local summary_file
-    if [ -n "$ollama_model" ]; then
-        summary_file=$(summarize_meeting "$transcription_file" -o "$ollama_model")
-    else
-        summary_file=$(summarize_meeting "$transcription_file")
+    local cmd="\"$PYTHON\" \"${SCRIPT_DIR}/diarize.py\" \"$audio_file\""
+    [ -n "$speakers" ] && cmd="$cmd -s $speakers"
+
+    eval $cmd
+
+    # Determine output file
+    local base="${audio_file%.*}"
+    local output="${base}_speakers.json"
+
+    if [ -f "$output" ]; then
+        log_success "Diarization complete: $output"
+        echo "$output"
     fi
+}
 
-    if [ -z "$summary_file" ] || [ ! -f "$summary_file" ]; then
-        log_error "Summarization failed"
+label_speakers() {
+    local diarized_file="$1"
+    shift
+
+    if [ ! -f "$diarized_file" ]; then
+        log_error "Diarized file not found: $diarized_file"
         exit 1
     fi
 
+    log_info "Labeling speakers in: $diarized_file"
     echo ""
-    log_success "Complete workflow finished!"
-    echo ""
-    echo "Files generated:"
-    echo "  Audio:          $audio_file"
-    echo "  Transcription:  $transcription_file"
-    echo "  Summary:        $summary_file"
+
+    # Run label.py interactively (don't capture output)
+    "$PYTHON" "${SCRIPT_DIR}/label.py" "$diarized_file" </dev/tty
+
+    # Determine output file
+    local base="${diarized_file%_diarized.json}"
+    local output="${base}_speakers_labeled.json"
+
+    if [ -f "$output" ]; then
+        echo ""
+        log_success "Labeling complete: $output"
+        echo "$output"
+    fi
+}
+
+apply_speaker_labels() {
+    local labeled_file="$1"
+    shift
+
+    local format="txt"
+    local output=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -f|--format)
+                format="$2"
+                shift 2
+                ;;
+            -o|--output)
+                output="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [ ! -f "$labeled_file" ]; then
+        log_error "Labeled file not found: $labeled_file"
+        exit 1
+    fi
+
+    log_info "Applying labels to transcript: $labeled_file"
+
+    local cmd="\"$PYTHON\" \"${SCRIPT_DIR}/apply_labels.py\" \"$labeled_file\" -f $format"
+    [ -n "$output" ] && cmd="$cmd -o \"$output\""
+
+    eval $cmd
+
+    # Determine output file
+    if [ -z "$output" ]; then
+        # Extract base name from labeled file
+        local base=$(basename "$labeled_file" "_speakers_labeled.json")
+        base="${base%.json}"
+        output="$(dirname "$labeled_file")/${base}.${format}"
+    fi
+
+    if [ -f "$output" ]; then
+        log_success "Transcript complete: $output"
+        echo "$output"
+    fi
 }
 
 list_recordings() {
@@ -363,6 +644,7 @@ list_recordings() {
             # Check for associated files
             local base="${file%.*}"
             [ -f "${base}.txt" ] && echo "   ✓ Transcription available"
+            [ -f "${base}_speakers.json" ] && echo "   ✓ Diarization available"
             [ -f "${base}_summary.md" ] && echo "   ✓ Summary available"
             echo ""
         fi
@@ -404,6 +686,222 @@ main() {
                 exit 1
             fi
             summarize_meeting "$@"
+            ;;
+        diarize)
+            if [ $# -eq 0 ]; then
+                log_error "Missing audio file argument"
+                echo "Usage: $0 diarize FILE [OPTIONS]"
+                exit 1
+            fi
+            diarize_meeting "$@"
+            ;;
+        label)
+            if [ $# -eq 0 ]; then
+                log_error "Missing diarized file argument"
+                echo "Usage: $0 label FILE"
+                exit 1
+            fi
+            label_speakers "$@"
+            ;;
+        apply-labels)
+            if [ $# -eq 0 ]; then
+                log_error "Missing labeled file argument"
+                echo "Usage: $0 apply-labels FILE [OPTIONS]"
+                exit 1
+            fi
+            apply_speaker_labels "$@"
+            ;;
+        process)
+            if [ $# -eq 0 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+                echo "Usage: $0 process FILE [OPTIONS]"
+                echo ""
+                echo "Process an existing recording (transcribe + optional diarize + summarize)"
+                echo ""
+                echo "Options:"
+                echo "  -m, --model MODEL   Whisper model (tiny|base|small|medium|large-v3)"
+                echo "  -o, --ollama MODEL  Ollama model for summarization"
+                echo "  -s, --speakers NUM  Number of speakers (requires --diarize)"
+                echo "  --diarize           Enable speaker diarization"
+                echo ""
+                echo "Examples:"
+                echo "  # Simple processing (transcribe + summarize)"
+                echo "  $0 process recordings/meeting.wav -m tiny"
+                echo ""
+                echo "  # With speaker diarization"
+                echo "  $0 process recordings/meeting.wav --diarize --speakers 2 -m small"
+                exit 0
+            fi
+
+            local audio_file="$1"
+            shift
+
+            if [ ! -f "$audio_file" ]; then
+                log_error "Audio file not found: $audio_file"
+                exit 1
+            fi
+
+            # Parse arguments
+            local whisper_model="$WHISPER_MODEL"
+            local ollama_model="$OLLAMA_MODEL"
+            local enable_diarization=false
+            local num_speakers=""
+
+            while [[ $# -gt 0 ]]; do
+                case $1 in
+                    -m|--model)
+                        whisper_model="$2"
+                        shift 2
+                        ;;
+                    -o|--ollama)
+                        ollama_model="$2"
+                        shift 2
+                        ;;
+                    --diarize)
+                        enable_diarization=true
+                        shift
+                        ;;
+                    -s|--speakers)
+                        num_speakers="$2"
+                        shift 2
+                        ;;
+                    *)
+                        shift
+                        ;;
+                esac
+            done
+
+            if [ "$enable_diarization" = true ]; then
+                log_info "Processing recording with diarization: $audio_file"
+                echo ""
+
+                # Step 1: Diarize
+                log_info "Step 1: Identifying speakers..."
+                local speakers_file
+                if [ -n "$num_speakers" ]; then
+                    speakers_file=$(diarize_meeting "$audio_file" -s "$num_speakers")
+                else
+                    speakers_file=$(diarize_meeting "$audio_file")
+                fi
+
+                if [ -z "$speakers_file" ] || [ ! -f "$speakers_file" ]; then
+                    log_error "Diarization failed"
+                    exit 1
+                fi
+                echo ""
+
+                # Step 2: Transcribe
+                log_info "Step 2: Transcribing audio..."
+                local base="${audio_file%.*}"
+                local transcription_json="${base}.json"
+
+                "$PYTHON" "${SCRIPT_DIR}/transcribe.py" "$audio_file" -m "$whisper_model" -f json -o "$transcription_json"
+
+                if [ ! -f "$transcription_json" ]; then
+                    log_error "Transcription failed"
+                    exit 1
+                fi
+                echo ""
+
+                # Step 3: Merge
+                log_info "Step 3: Merging speaker info with transcription..."
+                local diarized_file="${base}_diarized.json"
+
+                "$PYTHON" "${SCRIPT_DIR}/merge_diarization.py" "$speakers_file" "$transcription_json" -o "$diarized_file"
+
+                if [ ! -f "$diarized_file" ]; then
+                    log_error "Merge failed"
+                    exit 1
+                fi
+                echo ""
+
+                # Step 4: Label speakers
+                log_info "Step 4: Label speakers with their names..."
+                echo ""
+
+                # Call label_speakers without command substitution to allow interactive input
+                label_speakers "$diarized_file"
+
+                # Determine output file manually
+                local base="${diarized_file%_diarized.json}"
+                local labeled_file="${base}_speakers_labeled.json"
+
+                if [ ! -f "$labeled_file" ]; then
+                    log_error "Labeling failed"
+                    exit 1
+                fi
+                echo ""
+
+                # Step 5: Apply labels
+                log_info "Step 5: Creating final transcript with speaker names..."
+                local transcription_file=$(apply_speaker_labels "$labeled_file" -f txt)
+
+                if [ -z "$transcription_file" ] || [ ! -f "$transcription_file" ]; then
+                    log_error "Apply labels failed"
+                    exit 1
+                fi
+                echo ""
+
+                # Step 6: Summarize
+                log_info "Step 6: Generating summary..."
+                local summary_file
+                if [ -n "$ollama_model" ]; then
+                    summary_file=$(summarize_meeting "$transcription_file" -o "$ollama_model")
+                else
+                    summary_file=$(summarize_meeting "$transcription_file")
+                fi
+
+                if [ -z "$summary_file" ] || [ ! -f "$summary_file" ]; then
+                    log_error "Summarization failed"
+                    exit 1
+                fi
+
+                echo ""
+                log_success "Processing complete with diarization!"
+                echo ""
+                echo "Files generated:"
+                echo "  Audio:          $audio_file"
+                echo "  Diarization:    $speakers_file"
+                echo "  Labeled:        $labeled_file"
+                echo "  Transcription:  $transcription_file"
+                echo "  Summary:        $summary_file"
+            else
+                # Simple transcribe + summarize workflow
+                log_info "Processing recording: $audio_file"
+                echo ""
+
+                local transcription_file=$(transcribe_meeting "$audio_file" -m "$whisper_model")
+
+                if [ -f "$transcription_file" ]; then
+                    local summary_file
+                    if [ -n "$ollama_model" ]; then
+                        summary_file=$(summarize_meeting "$transcription_file" -o "$ollama_model")
+                    else
+                        summary_file=$(summarize_meeting "$transcription_file")
+                    fi
+
+                    echo ""
+                    log_success "Processing complete!"
+                    echo ""
+                    echo "Files generated:"
+                    echo "  Audio:          $audio_file"
+                    echo "  Transcription:  $transcription_file"
+                    echo "  Summary:        $summary_file"
+                fi
+            fi
+            ;;
+        process-last)
+            # Find most recent recording
+            local latest_recording=$(ls -t "$OUTPUT_DIR"/*.wav 2>/dev/null | head -1)
+
+            if [ -z "$latest_recording" ]; then
+                log_error "No recordings found in $OUTPUT_DIR"
+                exit 1
+            fi
+
+            log_info "Processing most recent recording: $(basename "$latest_recording")"
+
+            # Call process command with the latest recording
+            "$0" process "$latest_recording" "$@"
             ;;
         full)
             full_workflow "$@"

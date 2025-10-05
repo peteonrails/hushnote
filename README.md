@@ -10,12 +10,13 @@ HushNote is a local-only, offline-capable voice transcription and meeting summar
 
 - **🎙️ Audio Recording**: Capture system audio and microphone input using PulseAudio/PipeWire
 - **📝 Speech-to-Text Transcription**: Convert audio to text using faster-whisper (offline)
+- **👥 Speaker Diarization**: Identify who spoke when with interactive speaker labeling
 - **🤖 AI Summarization**: Generate meeting notes, action items, and summaries using Ollama
 - **🔒 100% Private**: All processing happens locally on your machine
 - **⚡ GPU Acceleration**: Support for AMD ROCm and NVIDIA CUDA
 - **📊 Multiple Output Formats**: TXT, JSON, SRT, VTT for transcripts; Markdown, JSON for summaries
 - **🎯 Flexible Model Selection**: Choose Whisper model size and Ollama model based on your needs
-- **🔄 Complete Workflow**: Single command to record, transcribe, and summarize meetings
+- **🔄 Complete Workflow**: Single command to record, diarize, transcribe, and summarize meetings
 
 ### Use Cases
 
@@ -85,6 +86,12 @@ chmod +x hushnote record_audio.sh transcribe.py summarize.py
 
 # Or with a fixed duration (1 hour)
 ./hushnote full -d 3600
+
+# With speaker diarization (identify who spoke when)
+./hushnote full --diarize --speakers 3
+
+# Note: Pressing Ctrl+C during recording will stop recording
+# and automatically continue with transcription and summarization
 ```
 
 ### Record Only
@@ -117,6 +124,18 @@ chmod +x hushnote record_audio.sh transcribe.py summarize.py
 ./hushnote summarize transcript.txt -o qwen2.5:14b
 ```
 
+### Identify Speakers (Diarization)
+
+```bash
+# Identify speakers in existing recording
+./hushnote diarize recording.wav --speakers 3
+
+# Label speakers with names
+./hushnote label recording_diarized.json
+```
+
+See [DIARIZATION.md](DIARIZATION.md) for complete speaker diarization guide.
+
 ### List Recordings
 
 ```bash
@@ -132,14 +151,21 @@ Commands:
     record              Start recording a meeting
     transcribe FILE     Transcribe an audio file
     summarize FILE      Summarize a transcription
-    full               Complete workflow: record, transcribe, and summarize
-    list               List all recordings
+    diarize FILE        Identify speakers in an audio file
+    label FILE          Label speakers with their names (interactive)
+    apply-labels FILE   Apply speaker labels to create final transcript
+    full                Complete workflow: record, transcribe, and summarize
+    process FILE        Process existing recording through full workflow
+    process-last        Process most recent recording through full workflow
+    list                List all recordings
 
 Options:
     -d, --duration SEC  Recording duration in seconds
     -m, --model MODEL   Whisper model size (tiny|base|small|medium|large-v3)
     -o, --ollama MODEL  Ollama model for summarization
     -f, --format FMT    Output format (txt|json|srt|vtt|md)
+    -s, --speakers NUM  Number of speakers (for diarization)
+    --diarize           Enable speaker diarization in full workflow
     -h, --help          Show help
 
 Environment Variables:
@@ -147,6 +173,7 @@ Environment Variables:
     WHISPER_MODEL       Default Whisper model (default: base)
     OLLAMA_MODEL        Default Ollama model (default: llama3.1:8b)
     OLLAMA_URL          Ollama API URL (default: http://localhost:11434)
+    HF_TOKEN            HuggingFace API token (for speaker diarization)
 ```
 
 ## Configuration
@@ -344,7 +371,7 @@ Live transcription that streams directly to cursor position:
 
 ### Advanced Features (Roadmap)
 
-- **Speaker Diarization**: Identify and label different speakers
+- **Zoom/Teams Integration**: Automatic speaker labeling from meeting APIs
 - **Multi-language Support**: Auto-detect and transcribe multiple languages
 - **Custom Vocabulary**: Add domain-specific terms for better accuracy
 - **Noise Reduction**: Pre-process audio to improve transcription quality
