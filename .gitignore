@@ -1,0 +1,64 @@
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Recordings and output
+recordings/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+
+# Transcriptions
+*.txt
+*.json
+*.srt
+*.vtt
+
+# Summaries
+*_summary.md
+*_summary.txt
+*_summary.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+
+# Environment
+.env
+.env.local
+
+# Keep example files if added later
+!examples/*.wav
+!examples/*.txt

@@ -1,0 +1,426 @@
+#!/bin/bash
+
+# Complete meeting recording, transcription, and summarization workflow
+# This script orchestrates all three steps: record -> transcribe -> summarize
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUTPUT_DIR="${RECORDINGS_DIR:-${SCRIPT_DIR}/recordings}"
+WHISPER_MODEL="${WHISPER_MODEL:-base}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.1:8b}"
+OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
+DEBUG="${DEBUG:-false}"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+print_usage() {
+    cat << EOF
+Usage: $0 [COMMAND] [OPTIONS]
+
+Commands:
+    record              Start recording a meeting
+    transcribe FILE     Transcribe an audio file
+    summarize FILE      Summarize a transcription
+    full               Complete workflow: record, transcribe, and summarize
+    list               List all recordings
+
+Options:
+    -d, --duration SEC  Recording duration in seconds (default: manual stop with Ctrl+C)
+    -m, --model MODEL   Whisper model size: tiny, base, small, medium, large-v3 (default: base)
+    -o, --ollama MODEL  Ollama model for summarization (default: llama3.1:8b)
+    -f, --format FMT    Output format: txt, json, srt, vtt, md (default: txt for transcribe, md for summarize)
+    -h, --help          Show this help message
+
+Environment Variables:
+    RECORDINGS_DIR      Directory for recordings (default: ./recordings)
+    WHISPER_MODEL       Default Whisper model (default: base)
+    OLLAMA_MODEL        Default Ollama model (default: llama3.1:8b)
+    OLLAMA_URL          Ollama API URL (default: http://localhost:11434)
+    DEBUG               Enable debug output (set to 'true' to enable)
+
+Examples:
+    # Record a meeting (stop with Ctrl+C)
+    $0 record
+
+    # Record for 1 hour
+    $0 record -d 3600
+
+    # Transcribe an audio file
+    $0 transcribe recordings/meeting_20251005_143022.wav
+
+    # Complete workflow: record, transcribe, and summarize
+    $0 full
+
+    # List all recordings
+    $0 list
+EOF
+}
+
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1" >&2
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1" >&2
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1" >&2
+}
+
+log_debug() {
+    if [ "$DEBUG" = "true" ]; then
+        echo -e "[DEBUG] $1" >&2
+    fi
+}
+
+check_dependencies() {
+    local missing=()
+
+    if ! command -v ffmpeg &> /dev/null; then
+        missing+=("ffmpeg")
+    fi
+
+    if ! command -v pactl &> /dev/null; then
+        missing+=("pactl (pulseaudio-utils or pipewire-pulse)")
+    fi
+
+    if ! command -v python3 &> /dev/null; then
+        missing+=("python3")
+    fi
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        log_error "Missing dependencies: ${missing[*]}"
+        exit 1
+    fi
+}
+
+record_meeting() {
+    local duration=""
+    local output_file=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -d|--duration)
+                duration="$2"
+                shift 2
+                ;;
+            -o|--output)
+                output_file="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    log_info "Starting meeting recording..."
+
+    # Build command arguments
+    local record_args=()
+    [ -n "$duration" ] && record_args+=("-d" "$duration")
+    [ -n "$output_file" ] && record_args+=("-o" "$output_file")
+
+    # Run recording and capture output file path
+    output_file=$("${SCRIPT_DIR}/record_audio.sh" "${record_args[@]}")
+
+    # Debug output
+    log_debug "Captured output_file=[$output_file]"
+    log_debug "File exists check: $([ -f "$output_file" ] && echo YES || echo NO)"
+
+    if [ -n "$output_file" ] && [ -f "$output_file" ]; then
+        log_success "Recording complete: $output_file"
+        echo "$output_file"
+    else
+        log_error "Failed to capture recording output or file doesn't exist"
+        return 1
+    fi
+}
+
+transcribe_meeting() {
+    local audio_file="$1"
+    shift
+
+    local model="$WHISPER_MODEL"
+    local format="txt"
+    local output=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -m|--model)
+                model="$2"
+                shift 2
+                ;;
+            -f|--format)
+                format="$2"
+                shift 2
+                ;;
+            -o|--output)
+                output="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [ ! -f "$audio_file" ]; then
+        log_error "Audio file not found: $audio_file"
+        exit 1
+    fi
+
+    log_info "Transcribing audio file: $audio_file"
+    log_info "Using Whisper model: $model"
+
+    local cmd="${SCRIPT_DIR}/transcribe.py \"$audio_file\" -m $model -f $format"
+    [ -n "$output" ] && cmd="$cmd -o \"$output\""
+
+    eval $cmd
+
+    # Determine output file
+    if [ -z "$output" ]; then
+        output="${audio_file%.*}.${format}"
+    fi
+
+    if [ -f "$output" ]; then
+        log_success "Transcription complete: $output"
+        echo "$output"
+    fi
+}
+
+summarize_meeting() {
+    local transcription_file="$1"
+    shift
+
+    local model="$OLLAMA_MODEL"
+    local format="md"
+    local output=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -o|--ollama)
+                model="$2"
+                shift 2
+                ;;
+            -f|--format)
+                format="$2"
+                shift 2
+                ;;
+            --output)
+                output="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [ ! -f "$transcription_file" ]; then
+        log_error "Transcription file not found: $transcription_file"
+        exit 1
+    fi
+
+    log_info "Summarizing transcription: $transcription_file"
+    log_info "Using Ollama model: $model"
+
+    local cmd="${SCRIPT_DIR}/summarize.py \"$transcription_file\" -m $model -f $format"
+    [ -n "$output" ] && cmd="$cmd -o \"$output\""
+
+    eval $cmd
+
+    # Determine output file
+    if [ -z "$output" ]; then
+        local base="${transcription_file%.*}"
+        output="${base}_summary.${format}"
+    fi
+
+    if [ -f "$output" ]; then
+        log_success "Summary complete: $output"
+        echo "$output"
+    fi
+}
+
+full_workflow() {
+    # Parse arguments for full workflow
+    local duration=""
+    local whisper_model="$WHISPER_MODEL"
+    local ollama_model="$OLLAMA_MODEL"
+    local format=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -d|--duration)
+                duration="$2"
+                shift 2
+                ;;
+            -m|--model)
+                whisper_model="$2"
+                shift 2
+                ;;
+            -o|--ollama)
+                ollama_model="$2"
+                shift 2
+                ;;
+            -f|--format)
+                format="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    log_info "Starting full meeting workflow..."
+    echo ""
+
+    # Step 1: Record
+    log_info "Step 1/3: Recording audio..."
+    local audio_file
+    if [ -n "$duration" ]; then
+        audio_file=$(record_meeting -d "$duration")
+    else
+        audio_file=$(record_meeting)
+    fi
+
+    if [ -z "$audio_file" ] || [ ! -f "$audio_file" ]; then
+        log_error "Recording failed"
+        exit 1
+    fi
+
+    echo ""
+
+    # Step 2: Transcribe
+    log_info "Step 2/3: Transcribing audio..."
+    local transcription_file
+    if [ -n "$whisper_model" ]; then
+        transcription_file=$(transcribe_meeting "$audio_file" -m "$whisper_model")
+    else
+        transcription_file=$(transcribe_meeting "$audio_file")
+    fi
+
+    if [ -z "$transcription_file" ] || [ ! -f "$transcription_file" ]; then
+        log_error "Transcription failed"
+        exit 1
+    fi
+
+    echo ""
+
+    # Step 3: Summarize
+    log_info "Step 3/3: Generating summary..."
+    local summary_file
+    if [ -n "$ollama_model" ]; then
+        summary_file=$(summarize_meeting "$transcription_file" -o "$ollama_model")
+    else
+        summary_file=$(summarize_meeting "$transcription_file")
+    fi
+
+    if [ -z "$summary_file" ] || [ ! -f "$summary_file" ]; then
+        log_error "Summarization failed"
+        exit 1
+    fi
+
+    echo ""
+    log_success "Complete workflow finished!"
+    echo ""
+    echo "Files generated:"
+    echo "  Audio:          $audio_file"
+    echo "  Transcription:  $transcription_file"
+    echo "  Summary:        $summary_file"
+}
+
+list_recordings() {
+    log_info "Recordings in $OUTPUT_DIR:"
+    echo ""
+
+    if [ ! -d "$OUTPUT_DIR" ] || [ -z "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]; then
+        log_warn "No recordings found"
+        exit 0
+    fi
+
+    local count=0
+    for file in "$OUTPUT_DIR"/*.wav; do
+        if [ -f "$file" ]; then
+            count=$((count + 1))
+            local size=$(du -h "$file" | cut -f1)
+            local date=$(stat -c %y "$file" | cut -d' ' -f1,2 | cut -d'.' -f1)
+            echo "$count. $(basename "$file")"
+            echo "   Size: $size | Date: $date"
+
+            # Check for associated files
+            local base="${file%.*}"
+            [ -f "${base}.txt" ] && echo "   ✓ Transcription available"
+            [ -f "${base}_summary.md" ] && echo "   ✓ Summary available"
+            echo ""
+        fi
+    done
+
+    if [ $count -eq 0 ]; then
+        log_warn "No recordings found"
+    fi
+}
+
+# Main command dispatcher
+main() {
+    if [ $# -eq 0 ]; then
+        print_usage
+        exit 0
+    fi
+
+    check_dependencies
+
+    local command="$1"
+    shift
+
+    case "$command" in
+        record)
+            record_meeting "$@"
+            ;;
+        transcribe)
+            if [ $# -eq 0 ]; then
+                log_error "Missing audio file argument"
+                echo "Usage: $0 transcribe FILE [OPTIONS]"
+                exit 1
+            fi
+            transcribe_meeting "$@"
+            ;;
+        summarize)
+            if [ $# -eq 0 ]; then
+                log_error "Missing transcription file argument"
+                echo "Usage: $0 summarize FILE [OPTIONS]"
+                exit 1
+            fi
+            summarize_meeting "$@"
+            ;;
+        full)
+            full_workflow "$@"
+            ;;
+        list)
+            list_recordings
+            ;;
+        -h|--help)
+            print_usage
+            ;;
+        *)
+            log_error "Unknown command: $command"
+            echo ""
+            print_usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
