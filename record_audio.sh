@@ -25,6 +25,7 @@ OUTPUT_FILE="${MEETING_DIR}/meeting_${TIMESTAMP}.wav"
 
 # Parse arguments
 DURATION=""
+TITLE=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         -d|--duration)
@@ -35,10 +36,15 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_FILE="$2"
             shift 2
             ;;
+        -t|--title)
+            TITLE="$2"
+            shift 2
+            ;;
         -h|--help)
-            echo "Usage: $0 [-d DURATION] [-o OUTPUT_FILE]"
+            echo "Usage: $0 [-d DURATION] [-o OUTPUT_FILE] [-t TITLE]"
             echo "  -d, --duration    Recording duration (e.g., 3600 for 1 hour)"
             echo "  -o, --output      Output file path (default: ./recordings/meeting_TIMESTAMP.wav)"
+            echo "  -t, --title       Meeting title"
             echo ""
             echo "Environment variables:"
             echo "  RECORDINGS_DIR    Directory for recordings (default: ./recordings)"
@@ -85,6 +91,34 @@ set -e
 if [ -f "$OUTPUT_FILE" ]; then
     echo "" >&2
     echo "Recording saved to: $OUTPUT_FILE" >&2
+
+    # Prompt for title if not provided
+    if [ -z "$TITLE" ]; then
+        echo "" >&2
+        read -p "Meeting title (optional): " TITLE </dev/tty
+    fi
+
+    # Create metadata file
+    meeting_dir=$(dirname "$OUTPUT_FILE")
+    base_name=$(basename "$OUTPUT_FILE" .wav)
+    metadata_file="${meeting_dir}/${base_name}_metadata.json"
+
+    # Generate metadata JSON
+    cat > "$metadata_file" << EOF
+{
+  "title": "${TITLE}",
+  "timestamp": "${TIMESTAMP}",
+  "date": "${DATE}",
+  "audio_file": "$(basename "$OUTPUT_FILE")",
+  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "source": "local_recording"
+}
+EOF
+
+    if [ -n "$TITLE" ]; then
+        echo "Title: $TITLE" >&2
+    fi
+
     # Output only the filename to stdout (for script capture)
     echo "$OUTPUT_FILE"
 else

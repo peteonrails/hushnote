@@ -44,6 +44,7 @@ Options:
     -o, --ollama MODEL  Ollama model for summarization (default: llama3.1:8b)
     -f, --format FMT    Output format: txt, json, srt, vtt, md (default: txt for transcribe, md for summarize)
     -s, --speakers NUM  Number of speakers (for diarization)
+    -t, --title TITLE   Meeting title (prompted if not provided)
     --diarize           Enable speaker diarization in full workflow
     --no-compress       Skip MP3 compression (keep WAV only)
     --keep-wav          Keep WAV file after compression (default: delete WAV)
@@ -122,6 +123,7 @@ check_dependencies() {
 record_meeting() {
     local duration=""
     local output_file=""
+    local title=""
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -131,6 +133,10 @@ record_meeting() {
                 ;;
             -o|--output)
                 output_file="$2"
+                shift 2
+                ;;
+            -t|--title)
+                title="$2"
                 shift 2
                 ;;
             *)
@@ -145,6 +151,7 @@ record_meeting() {
     local record_args=()
     [ -n "$duration" ] && record_args+=("-d" "$duration")
     [ -n "$output_file" ] && record_args+=("-o" "$output_file")
+    [ -n "$title" ] && record_args+=("-t" "$title")
 
     # Run recording and capture output file path
     # Use temp file to avoid command substitution exit on CTRL-C
@@ -289,6 +296,7 @@ full_workflow() {
     local enable_compression=true
     local keep_wav=false
     local clean_all=false
+    local title=""
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -306,6 +314,10 @@ full_workflow() {
                 ;;
             -f|--format)
                 format="$2"
+                shift 2
+                ;;
+            -t|--title)
+                title="$2"
                 shift 2
                 ;;
             --diarize)
@@ -350,13 +362,18 @@ full_workflow() {
     local recording_result_file="/tmp/hushnote_recording_$$"
     local recording_exit_code=0
 
+    # Build record_meeting arguments
+    local record_args=()
+    [ -n "$duration" ] && record_args+=("-d" "$duration")
+    [ -n "$title" ] && record_args+=("-t" "$title")
+
     if [ -n "$duration" ]; then
-        record_meeting -d "$duration" > "$recording_result_file"
+        record_meeting "${record_args[@]}" > "$recording_result_file"
         recording_exit_code=$?
     else
         # For open-ended recording, call in a way that captures exit code but continues
         # The || true prevents set -e from exiting, then we check the actual exit code
-        record_meeting > "$recording_result_file" || recording_exit_code=$?
+        record_meeting "${record_args[@]}" > "$recording_result_file" || recording_exit_code=$?
 
         log_debug "Recording exit code: $recording_exit_code"
 
@@ -802,12 +819,23 @@ list_recordings() {
             local timestamp=$(stat -c %y "$wav_file" | cut -d' ' -f1,2 | cut -d'.' -f1)
             local meeting_name=$(basename "$meeting_dir")
 
-            echo "$count. $formatted_date - $(basename "$meeting_name")"
+            # Try to load title from metadata file
+            local base="${wav_file%.*}"
+            local metadata_file="${base}_metadata.json"
+            local title=""
+            if [ -f "$metadata_file" ]; then
+                title=$(grep -o '"title"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata_file" | sed 's/"title"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/')
+            fi
+
+            if [ -n "$title" ]; then
+                echo "$count. $formatted_date - $title"
+            else
+                echo "$count. $formatted_date - $(basename "$meeting_name")"
+            fi
             echo "   Path: $meeting_dir"
             echo "   Size: $size | Date: $timestamp"
 
             # Check for associated files
-            local base="${wav_file%.*}"
             [ -f "${base}.txt" ] && echo "   ✓ Transcription available"
             [ -f "${base}_speakers.json" ] && echo "   ✓ Diarization available"
             [ -f "${base}_summary.md" ] && echo "   ✓ Summary available"
