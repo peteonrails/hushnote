@@ -633,21 +633,43 @@ list_recordings() {
     fi
 
     local count=0
-    for file in "$OUTPUT_DIR"/*.wav; do
-        if [ -f "$file" ]; then
+    # Iterate through date directories (YYYYMMDD format)
+    for date_dir in "$OUTPUT_DIR"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]; do
+        if [ ! -d "$date_dir" ]; then
+            continue
+        fi
+
+        local date_name=$(basename "$date_dir")
+        local formatted_date="${date_name:0:4}-${date_name:4:2}-${date_name:6:2}"
+
+        # Iterate through meeting directories within each date
+        for meeting_dir in "$date_dir"/meeting_*; do
+            if [ ! -d "$meeting_dir" ]; then
+                continue
+            fi
+
+            # Find the .wav file in the meeting directory
+            local wav_file=$(find "$meeting_dir" -name "*.wav" -type f | head -1)
+            if [ -z "$wav_file" ] || [ ! -f "$wav_file" ]; then
+                continue
+            fi
+
             count=$((count + 1))
-            local size=$(du -h "$file" | cut -f1)
-            local date=$(stat -c %y "$file" | cut -d' ' -f1,2 | cut -d'.' -f1)
-            echo "$count. $(basename "$file")"
-            echo "   Size: $size | Date: $date"
+            local size=$(du -h "$wav_file" | cut -f1)
+            local timestamp=$(stat -c %y "$wav_file" | cut -d' ' -f1,2 | cut -d'.' -f1)
+            local meeting_name=$(basename "$meeting_dir")
+
+            echo "$count. $formatted_date - $(basename "$meeting_name")"
+            echo "   Path: $meeting_dir"
+            echo "   Size: $size | Date: $timestamp"
 
             # Check for associated files
-            local base="${file%.*}"
+            local base="${wav_file%.*}"
             [ -f "${base}.txt" ] && echo "   ✓ Transcription available"
             [ -f "${base}_speakers.json" ] && echo "   ✓ Diarization available"
             [ -f "${base}_summary.md" ] && echo "   ✓ Summary available"
             echo ""
-        fi
+        done
     done
 
     if [ $count -eq 0 ]; then
@@ -890,15 +912,39 @@ main() {
             fi
             ;;
         process-last)
-            # Find most recent recording
-            local latest_recording=$(ls -t "$OUTPUT_DIR"/*.wav 2>/dev/null | head -1)
+            # Find most recent recording in date/meeting subdirectories
+            local latest_recording=""
+            local latest_time=0
+
+            # Search through all date directories and meeting subdirectories
+            for date_dir in "$OUTPUT_DIR"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]; do
+                if [ ! -d "$date_dir" ]; then
+                    continue
+                fi
+
+                for meeting_dir in "$date_dir"/meeting_*; do
+                    if [ ! -d "$meeting_dir" ]; then
+                        continue
+                    fi
+
+                    # Find .wav file in meeting directory
+                    local wav_file=$(find "$meeting_dir" -name "*.wav" -type f | head -1)
+                    if [ -n "$wav_file" ] && [ -f "$wav_file" ]; then
+                        local file_time=$(stat -c %Y "$wav_file" 2>/dev/null || echo 0)
+                        if [ "$file_time" -gt "$latest_time" ]; then
+                            latest_time=$file_time
+                            latest_recording="$wav_file"
+                        fi
+                    fi
+                done
+            done
 
             if [ -z "$latest_recording" ]; then
                 log_error "No recordings found in $OUTPUT_DIR"
                 exit 1
             fi
 
-            log_info "Processing most recent recording: $(basename "$latest_recording")"
+            log_info "Processing most recent recording: $(basename "$(dirname "$latest_recording")")/$(basename "$latest_recording")"
 
             # Call process command with the latest recording
             "$0" process "$latest_recording" "$@"

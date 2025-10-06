@@ -18,8 +18,10 @@ fi
 
 # Configuration
 OUTPUT_DIR="${RECORDINGS_DIR:-./recordings}"
+DATE=$(date +%Y%m%d)
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-OUTPUT_FILE="${OUTPUT_DIR}/meeting_${TIMESTAMP}.wav"
+MEETING_DIR="${OUTPUT_DIR}/${DATE}/meeting_${TIMESTAMP}"
+OUTPUT_FILE="${MEETING_DIR}/meeting_${TIMESTAMP}.wav"
 
 # Parse arguments
 DURATION=""
