@@ -8,6 +8,7 @@ Shows actual quotes from each speaker and prompts user to identify them
 import argparse
 import json
 import sys
+import random
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -42,7 +43,7 @@ def format_time(seconds: float) -> str:
     return f"{mins}:{secs:02d}"
 
 
-def get_speaker_samples(data: dict, speaker_id: str, num_samples: int = 3) -> list:
+def get_speaker_samples(data: dict, speaker_id: str, num_samples: int = 3, random_samples: bool = False) -> list:
     """
     Get sample quotes from a speaker
 
@@ -50,6 +51,7 @@ def get_speaker_samples(data: dict, speaker_id: str, num_samples: int = 3) -> li
         data: Diarized data with segments
         speaker_id: Speaker to get samples for
         num_samples: Number of sample quotes to return
+        random_samples: If True, get random samples instead of beginning/middle/end
 
     Returns:
         List of sample segments with text
@@ -62,20 +64,42 @@ def get_speaker_samples(data: dict, speaker_id: str, num_samples: int = 3) -> li
     if not speaker_segments:
         return []
 
-    # Get samples from beginning, middle, and end
-    samples = []
-    if len(speaker_segments) >= num_samples:
-        # First quote
-        samples.append(speaker_segments[0])
-        # Middle quote
-        samples.append(speaker_segments[len(speaker_segments) // 2])
-        # Last quote (or near end)
-        samples.append(speaker_segments[-1])
+    if random_samples:
+        # Get random samples
+        if len(speaker_segments) <= num_samples:
+            return speaker_segments
+        return random.sample(speaker_segments, num_samples)
     else:
-        # Just return what we have
-        samples = speaker_segments[:num_samples]
+        # Get samples from beginning, middle, and end
+        samples = []
+        if len(speaker_segments) >= num_samples:
+            # First quote
+            samples.append(speaker_segments[0])
+            # Middle quote
+            samples.append(speaker_segments[len(speaker_segments) // 2])
+            # Last quote (or near end)
+            samples.append(speaker_segments[-1])
+        else:
+            # Just return what we have
+            samples = speaker_segments[:num_samples]
 
-    return samples
+        return samples
+
+
+def display_quotes(samples: list, max_length: int = 100):
+    """Display quote samples with timestamps"""
+    if not samples:
+        print("  (No quotes available)")
+        return
+
+    print("Sample quotes:")
+    for sample in samples:
+        timestamp = format_time(sample["start"])
+        text = sample["text"].strip()
+        # Truncate long quotes
+        if len(text) > max_length:
+            text = text[:max_length] + "..."
+        print(f"  [{timestamp}] \"{text}\"")
 
 
 def interactive_label_speakers(data: dict) -> dict:
@@ -113,34 +137,34 @@ def interactive_label_speakers(data: dict) -> dict:
         print(f"{speaker_id} ({format_time(total_time)}, {segment_count} segments)")
         print()
 
-        # Get sample quotes
+        # Get initial sample quotes
         samples = get_speaker_samples(data, speaker_id, num_samples=3)
-
-        if samples:
-            print("Sample quotes:")
-            for sample in samples:
-                timestamp = format_time(sample["start"])
-                text = sample["text"].strip()
-                # Truncate long quotes
-                if len(text) > 100:
-                    text = text[:100] + "..."
-                print(f"  [{timestamp}] \"{text}\"")
-            print()
+        display_quotes(samples)
+        print()
 
         # Prompt for name
         while True:
             try:
-                name = input(f"Who is {speaker_id}? ").strip()
+                prompt = f"Who is {speaker_id}? (or 'm' for more quotes) "
+                response = input(prompt).strip()
 
-                if name:
+                if response.lower() == 'm':
+                    # Show more random quotes
+                    print()
+                    samples = get_speaker_samples(data, speaker_id, num_samples=5, random_samples=True)
+                    display_quotes(samples)
+                    print()
+                    continue
+
+                if response:
                     labels[speaker_id] = {
-                        "name": name,
+                        "name": response,
                         "email": None,
                         "role": None,
                         "source": "manual",
                         "labeled_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
                     }
-                    print(f"✓ Labeled as \"{name}\"")
+                    print(f"✓ Labeled as \"{response}\"")
                     break
                 else:
                     # Allow skipping
