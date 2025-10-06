@@ -31,6 +31,8 @@ Commands:
     diarize FILE        Identify speakers in an audio file
     label FILE          Label speakers with their names (interactive)
     apply-labels FILE   Apply speaker labels to create final transcript
+    compress FILE       Compress WAV to MP3 and delete WAV
+    clean FILE          Delete ALL audio files (WAV and MP3)
     full               Complete workflow: record, transcribe, and summarize
     process FILE        Process existing recording (transcribe + diarize + summarize)
     process-last        Process most recent recording (transcribe + diarize + summarize)
@@ -43,6 +45,9 @@ Options:
     -f, --format FMT    Output format: txt, json, srt, vtt, md (default: txt for transcribe, md for summarize)
     -s, --speakers NUM  Number of speakers (for diarization)
     --diarize           Enable speaker diarization in full workflow
+    --no-compress       Skip MP3 compression (keep WAV only)
+    --keep-wav          Keep WAV file after compression (default: delete WAV)
+    --clean             Delete ALL audio files (WAV and MP3), keep only text
     -h, --help          Show this help message
 
 Environment Variables:
@@ -281,6 +286,9 @@ full_workflow() {
     local format=""
     local enable_diarization=false
     local num_speakers=""
+    local enable_compression=true
+    local keep_wav=false
+    local clean_all=false
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -307,6 +315,18 @@ full_workflow() {
             -s|--speakers)
                 num_speakers="$2"
                 shift 2
+                ;;
+            --no-compress)
+                enable_compression=false
+                shift
+                ;;
+            --keep-wav)
+                keep_wav=true
+                shift
+                ;;
+            --clean)
+                clean_all=true
+                shift
                 ;;
             *)
                 shift
@@ -457,6 +477,32 @@ full_workflow() {
         fi
 
         echo ""
+
+        # Step 8: Compress audio and cleanup
+        if [ "$clean_all" = true ]; then
+            log_info "Step 8: Removing all audio files..."
+            # Delete both WAV and MP3 if they exist
+            [ -f "$audio_file" ] && rm "$audio_file" && log_success "Deleted: $audio_file"
+            local mp3_file="${audio_file%.wav}.mp3"
+            [ -f "$mp3_file" ] && rm "$mp3_file" && log_success "Deleted: $mp3_file"
+            audio_file="(deleted)"
+            echo ""
+        elif [ "$enable_compression" = true ]; then
+            log_info "Step 8: Compressing audio to MP3..."
+            local mp3_file
+            if [ "$keep_wav" = true ]; then
+                mp3_file=$(compress_audio "$audio_file")
+            else
+                # Default: delete WAV after compression
+                mp3_file=$(compress_audio "$audio_file" --delete-wav)
+            fi
+
+            if [ -n "$mp3_file" ] && [ -f "$mp3_file" ]; then
+                audio_file="$mp3_file"
+            fi
+            echo ""
+        fi
+
         log_success "Complete workflow with diarization finished!"
         echo ""
         echo "Files generated:"
@@ -499,6 +545,32 @@ full_workflow() {
         fi
 
         echo ""
+
+        # Step 4: Compress audio and cleanup
+        if [ "$clean_all" = true ]; then
+            log_info "Step 4/4: Removing all audio files..."
+            # Delete both WAV and MP3 if they exist
+            [ -f "$audio_file" ] && rm "$audio_file" && log_success "Deleted: $audio_file"
+            local mp3_file="${audio_file%.wav}.mp3"
+            [ -f "$mp3_file" ] && rm "$mp3_file" && log_success "Deleted: $mp3_file"
+            audio_file="(deleted)"
+            echo ""
+        elif [ "$enable_compression" = true ]; then
+            log_info "Step 4/4: Compressing audio to MP3..."
+            local mp3_file
+            if [ "$keep_wav" = true ]; then
+                mp3_file=$(compress_audio "$audio_file")
+            else
+                # Default: delete WAV after compression
+                mp3_file=$(compress_audio "$audio_file" --delete-wav)
+            fi
+
+            if [ -n "$mp3_file" ] && [ -f "$mp3_file" ]; then
+                audio_file="$mp3_file"
+            fi
+            echo ""
+        fi
+
         log_success "Complete workflow finished!"
         echo ""
         echo "Files generated:"
@@ -623,6 +695,77 @@ apply_speaker_labels() {
     fi
 }
 
+compress_audio() {
+    local audio_file="$1"
+    shift
+
+    local delete_wav=false
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --delete-wav|--clean)
+                delete_wav=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [ ! -f "$audio_file" ]; then
+        log_error "Audio file not found: $audio_file"
+        exit 1
+    fi
+
+    log_info "Compressing audio: $audio_file"
+
+    local cmd="\"${SCRIPT_DIR}/compress.sh\" \"$audio_file\""
+    [ "$delete_wav" = true ] && cmd="$cmd --delete-wav"
+
+    local mp3_file=$(eval $cmd)
+
+    if [ -n "$mp3_file" ] && [ -f "$mp3_file" ]; then
+        log_success "Compression complete: $mp3_file"
+        echo "$mp3_file"
+    fi
+}
+
+clean_audio() {
+    local audio_file="$1"
+
+    # Determine base path and possible audio files
+    local base_path="${audio_file%.wav}"
+    base_path="${base_path%.mp3}"
+    local wav_file="${base_path}.wav"
+    local mp3_file="${base_path}.mp3"
+
+    local deleted_count=0
+
+    log_info "Removing all audio files for: $(basename "$base_path")"
+
+    # Delete WAV if exists
+    if [ -f "$wav_file" ]; then
+        rm "$wav_file"
+        log_success "Deleted: $wav_file"
+        deleted_count=$((deleted_count + 1))
+    fi
+
+    # Delete MP3 if exists
+    if [ -f "$mp3_file" ]; then
+        rm "$mp3_file"
+        log_success "Deleted: $mp3_file"
+        deleted_count=$((deleted_count + 1))
+    fi
+
+    if [ $deleted_count -eq 0 ]; then
+        log_warn "No audio files found to delete"
+        exit 1
+    fi
+
+    log_info "Text files (transcripts, summaries) preserved"
+}
+
 list_recordings() {
     log_info "Recordings in $OUTPUT_DIR:"
     echo ""
@@ -733,6 +876,26 @@ main() {
             fi
             apply_speaker_labels "$@"
             ;;
+        compress)
+            if [ $# -eq 0 ]; then
+                log_error "Missing audio file argument"
+                echo "Usage: $0 compress FILE"
+                echo ""
+                echo "Compress WAV to MP3 and delete WAV (default workflow behavior)"
+                exit 1
+            fi
+            compress_audio "$1" --delete-wav
+            ;;
+        clean)
+            if [ $# -eq 0 ]; then
+                log_error "Missing audio file argument"
+                echo "Usage: $0 clean FILE"
+                echo ""
+                echo "Delete ALL audio files (WAV and MP3), keep only text/transcripts"
+                exit 1
+            fi
+            clean_audio "$@"
+            ;;
         process)
             if [ $# -eq 0 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
                 echo "Usage: $0 process FILE [OPTIONS]"
@@ -767,6 +930,9 @@ main() {
             local ollama_model="$OLLAMA_MODEL"
             local enable_diarization=false
             local num_speakers=""
+            local enable_compression=true
+            local keep_wav=false
+            local clean_all=false
 
             while [[ $# -gt 0 ]]; do
                 case $1 in
@@ -785,6 +951,18 @@ main() {
                     -s|--speakers)
                         num_speakers="$2"
                         shift 2
+                        ;;
+                    --no-compress)
+                        enable_compression=false
+                        shift
+                        ;;
+                    --keep-wav)
+                        keep_wav=true
+                        shift
+                        ;;
+                    --clean)
+                        clean_all=true
+                        shift
                         ;;
                     *)
                         shift
@@ -878,6 +1056,30 @@ main() {
                 fi
 
                 echo ""
+
+                # Step 7: Compress audio and cleanup
+                if [ "$clean_all" = true ]; then
+                    log_info "Step 7: Removing all audio files..."
+                    [ -f "$audio_file" ] && rm "$audio_file" && log_success "Deleted: $audio_file"
+                    local mp3_file="${audio_file%.wav}.mp3"
+                    [ -f "$mp3_file" ] && rm "$mp3_file" && log_success "Deleted: $mp3_file"
+                    audio_file="(deleted)"
+                    echo ""
+                elif [ "$enable_compression" = true ]; then
+                    log_info "Step 7: Compressing audio to MP3..."
+                    local mp3_file
+                    if [ "$keep_wav" = true ]; then
+                        mp3_file=$(compress_audio "$audio_file")
+                    else
+                        mp3_file=$(compress_audio "$audio_file" --delete-wav)
+                    fi
+
+                    if [ -n "$mp3_file" ] && [ -f "$mp3_file" ]; then
+                        audio_file="$mp3_file"
+                    fi
+                    echo ""
+                fi
+
                 log_success "Processing complete with diarization!"
                 echo ""
                 echo "Files generated:"
@@ -899,6 +1101,31 @@ main() {
                         summary_file=$(summarize_meeting "$transcription_file" -o "$ollama_model")
                     else
                         summary_file=$(summarize_meeting "$transcription_file")
+                    fi
+
+                    echo ""
+
+                    # Compress audio and cleanup
+                    if [ "$clean_all" = true ]; then
+                        echo ""
+                        log_info "Removing all audio files..."
+                        [ -f "$audio_file" ] && rm "$audio_file" && log_success "Deleted: $audio_file"
+                        local mp3_file="${audio_file%.wav}.mp3"
+                        [ -f "$mp3_file" ] && rm "$mp3_file" && log_success "Deleted: $mp3_file"
+                        audio_file="(deleted)"
+                    elif [ "$enable_compression" = true ]; then
+                        echo ""
+                        log_info "Compressing audio to MP3..."
+                        local mp3_file
+                        if [ "$keep_wav" = true ]; then
+                            mp3_file=$(compress_audio "$audio_file")
+                        else
+                            mp3_file=$(compress_audio "$audio_file" --delete-wav)
+                        fi
+
+                        if [ -n "$mp3_file" ] && [ -f "$mp3_file" ]; then
+                            audio_file="$mp3_file"
+                        fi
                     fi
 
                     echo ""
