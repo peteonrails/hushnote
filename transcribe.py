@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Transcription script using faster-whisper
+Transcription script using openai-whisper
 Transcribes audio files to text with timestamps
 """
 
@@ -11,67 +11,63 @@ import sys
 from pathlib import Path
 
 try:
-    from faster_whisper import WhisperModel
+    import whisper
+    import torch
 except ImportError:
-    print("Error: faster-whisper not installed", file=sys.stderr)
-    print("Install with: pip install faster-whisper", file=sys.stderr)
+    print("Error: openai-whisper not installed", file=sys.stderr)
+    print("Install with: pip install openai-whisper", file=sys.stderr)
     sys.exit(1)
 
 
 def transcribe_audio(
     audio_file: str,
     model_size: str = "base",
-    device: str = "cpu",
-    compute_type: str = "int8",
+    device: str = "auto",
     language: str = None,
     output_format: str = "txt"
 ) -> dict:
     """
-    Transcribe an audio file using faster-whisper
+    Transcribe an audio file using openai-whisper
 
     Args:
         audio_file: Path to audio file
-        model_size: Whisper model size (tiny, base, small, medium, large-v3)
+        model_size: Whisper model size (tiny, base, small, medium, large-v3, turbo)
         device: Device to use (cpu, cuda, auto)
-        compute_type: Compute type (int8, float16, float32)
         language: Language code (None for auto-detect)
         output_format: Output format (txt, json, srt, vtt)
 
     Returns:
         dict with transcription results
     """
-    print(f"Loading Whisper model: {model_size}", file=sys.stderr)
-    model = WhisperModel(model_size, device=device, compute_type=compute_type)
+    # Determine device
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    print(f"Loading Whisper model: {model_size} on {device}", file=sys.stderr)
+    model = whisper.load_model(model_size, device=device)
 
     print(f"Transcribing: {audio_file}", file=sys.stderr)
-    segments, info = model.transcribe(
+    result = model.transcribe(
         audio_file,
         language=language,
-        beam_size=5,
-        vad_filter=True,  # Voice activity detection
-        vad_parameters=dict(min_silence_duration_ms=500)
+        verbose=False
     )
 
-    print(f"Detected language: {info.language} (probability: {info.language_probability:.2f})", file=sys.stderr)
+    print(f"Detected language: {result['language']}", file=sys.stderr)
 
-    # Collect all segments
+    # Reformat segments to match our expected format
     all_segments = []
-    full_text = []
-
-    for segment in segments:
+    for segment in result["segments"]:
         all_segments.append({
-            "start": segment.start,
-            "end": segment.end,
-            "text": segment.text.strip()
+            "start": segment["start"],
+            "end": segment["end"],
+            "text": segment["text"].strip()
         })
-        full_text.append(segment.text.strip())
 
     return {
-        "language": info.language,
-        "language_probability": info.language_probability,
-        "duration": info.duration,
+        "language": result["language"],
         "segments": all_segments,
-        "text": " ".join(full_text)
+        "text": result["text"]
     }
 
 
@@ -115,17 +111,14 @@ def save_transcription(result: dict, output_file: str, format: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Transcribe audio using faster-whisper")
+    parser = argparse.ArgumentParser(description="Transcribe audio using openai-whisper")
     parser.add_argument("audio_file", help="Path to audio file")
     parser.add_argument("-m", "--model", default="base",
-                       choices=["tiny", "base", "small", "medium", "large-v3"],
+                       choices=["tiny", "base", "small", "medium", "large-v3", "turbo"],
                        help="Whisper model size (default: base)")
-    parser.add_argument("-d", "--device", default="cpu",
+    parser.add_argument("-d", "--device", default="auto",
                        choices=["cpu", "cuda", "auto"],
-                       help="Device to use (default: cpu)")
-    parser.add_argument("-c", "--compute-type", default="int8",
-                       choices=["int8", "float16", "float32"],
-                       help="Compute type (default: int8)")
+                       help="Device to use (default: auto)")
     parser.add_argument("-l", "--language", default=None,
                        help="Language code (default: auto-detect)")
     parser.add_argument("-f", "--format", default="txt",
@@ -154,7 +147,6 @@ def main():
             args.audio_file,
             model_size=args.model,
             device=args.device,
-            compute_type=args.compute_type,
             language=args.language,
             output_format=args.format
         )
@@ -164,11 +156,12 @@ def main():
 
         # Print summary
         print(f"\nTranscription complete!", file=sys.stderr)
-        print(f"Duration: {result['duration']:.2f}s", file=sys.stderr)
         print(f"Segments: {len(result['segments'])}", file=sys.stderr)
 
     except Exception as e:
         print(f"Error during transcription: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 

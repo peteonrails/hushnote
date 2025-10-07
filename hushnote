@@ -6,6 +6,16 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load config file if it exists
+CONFIG_FILE="${SCRIPT_DIR}/.hushnoterc"
+if [ -f "$CONFIG_FILE" ]; then
+    # Source the config file
+    set -a  # Export all variables
+    source "$CONFIG_FILE"
+    set +a
+fi
+
 OUTPUT_DIR="${RECORDINGS_DIR:-${SCRIPT_DIR}/recordings}"
 WHISPER_MODEL="${WHISPER_MODEL:-base}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.1:8b}"
@@ -229,6 +239,9 @@ transcribe_meeting() {
     if [ -f "$output" ]; then
         log_success "Transcription complete: $output"
         echo "$output"
+    else
+        log_error "Transcription output file not created: $output"
+        return 1
     fi
 }
 
@@ -535,13 +548,15 @@ full_workflow() {
         log_info "Step 2/3: Transcribing audio..."
         local transcription_file
         if [ -n "$whisper_model" ]; then
-            transcription_file=$(transcribe_meeting "$audio_file" -m "$whisper_model")
+            transcription_file=$(transcribe_meeting "$audio_file" -m "$whisper_model" 2>&1 | tail -1)
         else
-            transcription_file=$(transcribe_meeting "$audio_file")
+            transcription_file=$(transcribe_meeting "$audio_file" 2>&1 | tail -1)
         fi
 
+        log_debug "Transcription file captured: [$transcription_file]"
+
         if [ -z "$transcription_file" ] || [ ! -f "$transcription_file" ]; then
-            log_error "Transcription failed"
+            log_error "Transcription failed - file not found: $transcription_file"
             exit 1
         fi
 

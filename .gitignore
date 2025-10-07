@@ -59,6 +59,9 @@ Thumbs.db
 .env
 .env.local
 
+# Local configuration
+.hushnoterc
+
 # Keep example files if added later
 !examples/*.wav
 !examples/*.txt

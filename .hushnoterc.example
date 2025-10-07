@@ -1,0 +1,28 @@
+# HushNote Configuration File Example
+# Copy this file to .hushnoterc and customize for your setup
+# cp .hushnoterc.example .hushnoterc
+
+# Whisper transcription model
+# Options: tiny, base, small, medium, large-v3, turbo
+# Recommended: medium (good balance of quality and GPU memory usage)
+WHISPER_MODEL=base
+
+# Ollama summarization model
+# Examples: llama3.1:8b, gemma2:9b, mistral:7b, qwen2.5:7b
+# Default: llama3.1:8b
+OLLAMA_MODEL=llama3.1:8b
+
+# Ollama server URL
+# Change if running Ollama on a different host/port
+OLLAMA_URL=http://localhost:11434
+
+# Recordings directory
+# Uncomment to change from default ./recordings
+# RECORDINGS_DIR=/path/to/recordings
+
+# Debug mode (set to "true" to enable verbose logging)
+# DEBUG=false
+
+# HuggingFace token for speaker diarization
+# Get yours at: https://huggingface.co/settings/tokens
+# HF_TOKEN=your_token_here
