@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="HushNote - Privacy-first meeting transcription and voice-to-text for Linux. Fully offline speech recognition using Whisper and local AI summarization.">
+    <meta name="keywords" content="meeting transcription, speech to text, linux, whisper, offline, open source, privacy, diarization, ollama">
+    <meta name="author" content="Peter Jackson">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="HushNote - Privacy-First Meeting Transcription for Linux">
+    <meta property="og:description" content="Local-only meeting transcription with speaker diarization and AI summarization. Your words stay on your machine.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://hushnote.dev">
+
+    <title>HushNote - Privacy-First Meeting Transcription for Linux</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="icon" type="image/svg+xml" href="images/favicon.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="#" class="nav-logo">
+                <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                    <line x1="12" y1="19" x2="12" y2="23"/>
+                    <line x1="8" y1="23" x2="16" y2="23"/>
+                    <line x1="5" y1="3" x2="19" y2="21" stroke-width="2.5"/>
+                </svg>
+                <span>HushNote</span>
+            </a>
+            <div class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#demo">Demo</a>
+                <a href="#install">Install</a>
+                <a href="https://github.com/peteonrails/hushnote" class="nav-github">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                    </svg>
+                    GitHub
+                </a>
+            </div>
+            <button class="nav-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <header class="hero">
+        <div class="hero-content">
+            <h1>Privacy-First <span class="highlight">Meeting Transcription</span></h1>
+            <p class="hero-subtitle">
+                Record, transcribe, identify speakers, and summarize meetings—all locally on your machine.
+                No cloud. No subscriptions. Your words stay yours.
+            </p>
+            <div class="hero-badges">
+                <span class="badge">100% Offline</span>
+                <span class="badge">Open Source</span>
+                <span class="badge">Speaker Diarization</span>
+                <span class="badge">AI Summaries</span>
+            </div>
+            <div class="hero-cta">
+                <a href="#install" class="btn btn-primary">Get Started</a>
+                <a href="https://github.com/peteonrails/hushnote" class="btn btn-secondary">View on GitHub</a>
+            </div>
+            <div class="hero-terminal">
+                <div class="terminal-header">
+                    <span class="terminal-dot red"></span>
+                    <span class="terminal-dot yellow"></span>
+                    <span class="terminal-dot green"></span>
+                    <span class="terminal-title">Terminal</span>
+                </div>
+                <div class="terminal-body">
+                    <pre><code><span class="prompt">$</span> ./hushnote full --diarize --speakers 3
+<span class="info">[INFO]</span> Recording started... (Ctrl+C to stop)
+<span class="comment"># Meeting in progress...</span>
+<span class="info">[INFO]</span> Recording stopped (45m 32s)
+<span class="info">[INFO]</span> Transcribing with whisper base model...
+<span class="info">[INFO]</span> Running speaker diarization...
+<span class="info">[INFO]</span> Identifying speakers...
+
+<span class="success">[DONE]</span> Transcription complete!
+<span class="output">  Sarah: "Let's discuss the Q4 roadmap..."
+  John:  "I think we should prioritize..."
+  Mike:  "The database migration is ready..."</span>
+
+<span class="info">[INFO]</span> Generating summary with llama3.1:8b...
+<span class="success">[DONE]</span> Summary saved to meeting_summary.md</code></pre>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Features Section -->
+    <section id="features" class="features">
+        <div class="container">
+            <h2>Why HushNote?</h2>
+            <p class="section-subtitle">Complete meeting intelligence that respects your privacy</p>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                            <polyline points="9 12 12 15 16 10"/>
+                        </svg>
+                    </div>
+                    <h3>100% Private & Offline</h3>
+                    <p>
+                        All processing happens locally using Whisper and Ollama.
+                        No cloud uploads, no API calls, no telemetry. Works without internet after setup.
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                            <circle cx="9" cy="7" r="4"/>
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                        </svg>
+                    </div>
+                    <h3>Speaker Diarization</h3>
+                    <p>
+                        Automatically identify who spoke when. Interactive labeling lets you
+                        assign real names to speakers for clean, attributed transcripts.
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="16" y1="13" x2="8" y2="13"/>
+                            <line x1="16" y1="17" x2="8" y2="17"/>
+                            <polyline points="10 9 9 9 8 9"/>
+                        </svg>
+                    </div>
+                    <h3>AI Summarization</h3>
+                    <p>
+                        Generate meeting notes, action items, and decisions using local LLMs via Ollama.
+                        Choose from llama3, mistral, qwen, or any model you prefer.
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                            <line x1="12" y1="19" x2="12" y2="23"/>
+                            <line x1="8" y1="23" x2="16" y2="23"/>
+                        </svg>
+                    </div>
+                    <h3>Audio Recording</h3>
+                    <p>
+                        Capture system audio and microphone using PulseAudio or PipeWire.
+                        Supports WAV and MP3 with automatic compression.
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                        </svg>
+                    </div>
+                    <h3>GPU Accelerated</h3>
+                    <p>
+                        Supports AMD ROCm and NVIDIA CUDA for fast transcription.
+                        Process an hour of audio in just a few minutes.
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="16 18 22 12 16 6"/>
+                            <polyline points="8 6 2 12 8 18"/>
+                        </svg>
+                    </div>
+                    <h3>Multiple Formats</h3>
+                    <p>
+                        Export transcripts as TXT, JSON, SRT, or VTT.
+                        Summaries in Markdown or JSON for easy integration.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Demo Section -->
+    <section id="demo" class="demo">
+        <div class="container">
+            <h2>Complete Workflow</h2>
+            <p class="section-subtitle">From recording to actionable meeting notes in one command</p>
+
+            <div class="workflow-steps">
+                <div class="workflow-step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h3>Record</h3>
+                        <p>Capture audio from your meeting</p>
+                        <div class="step-visual">
+                            <div class="waveform">
+                                <span class="wave-bar"></span>
+                                <span class="wave-bar"></span>
+                                <span class="wave-bar"></span>
+                                <span class="wave-bar"></span>
+                                <span class="wave-bar"></span>
+                                <span class="wave-bar"></span>
+                                <span class="wave-bar"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="workflow-step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h3>Transcribe</h3>
+                        <p>Convert speech to text with Whisper</p>
+                        <div class="step-visual">
+                            <div class="processing-animation">
+                                <div class="spinner"></div>
+                                <span>Processing...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="workflow-step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h3>Diarize</h3>
+                        <p>Identify who said what</p>
+                        <div class="step-visual speakers-visual">
+                            <span class="speaker speaker-1">Sarah</span>
+                            <span class="speaker speaker-2">John</span>
+                            <span class="speaker speaker-3">Mike</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="workflow-step">
+                    <div class="step-number">4</div>
+                    <div class="step-content">
+                        <h3>Summarize</h3>
+                        <p>Generate notes and action items</p>
+                        <div class="step-visual">
+                            <div class="summary-preview">
+                                <span class="summary-line">Summary</span>
+                                <span class="summary-line">Action Items</span>
+                                <span class="summary-line">Decisions</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Models Section -->
+    <section id="models" class="models">
+        <div class="container">
+            <h2>Choose Your Models</h2>
+            <p class="section-subtitle">Balance speed and accuracy for your hardware</p>
+
+            <div class="model-table-wrapper">
+                <table class="model-table">
+                    <thead>
+                        <tr>
+                            <th>Whisper Model</th>
+                            <th>Size</th>
+                            <th>Speed</th>
+                            <th>Accuracy</th>
+                            <th>Best For</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>tiny</code></td>
+                            <td>75 MB</td>
+                            <td>
+                                <div class="speed-bar">
+                                    <div class="speed-fill" style="width: 100%"></div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="accuracy-bar">
+                                    <div class="accuracy-fill" style="width: 50%"></div>
+                                </div>
+                            </td>
+                            <td>Quick drafts, testing</td>
+                        </tr>
+                        <tr class="recommended">
+                            <td><code>base</code> <span class="rec-badge">Default</span></td>
+                            <td>150 MB</td>
+                            <td>
+                                <div class="speed-bar">
+                                    <div class="speed-fill" style="width: 80%"></div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="accuracy-bar">
+                                    <div class="accuracy-fill" style="width: 70%"></div>
+                                </div>
+                            </td>
+                            <td>Most users, balanced</td>
+                        </tr>
+                        <tr>
+                            <td><code>small</code></td>
+                            <td>500 MB</td>
+                            <td>
+                                <div class="speed-bar">
+                                    <div class="speed-fill" style="width: 55%"></div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="accuracy-bar">
+                                    <div class="accuracy-fill" style="width: 82%"></div>
+                                </div>
+                            </td>
+                            <td>Higher accuracy needs</td>
+                        </tr>
+                        <tr>
+                            <td><code>medium</code></td>
+                            <td>1.5 GB</td>
+                            <td>
+                                <div class="speed-bar">
+                                    <div class="speed-fill" style="width: 35%"></div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="accuracy-bar">
+                                    <div class="accuracy-fill" style="width: 90%"></div>
+                                </div>
+                            </td>
+                            <td>Professional use</td>
+                        </tr>
+                        <tr>
+                            <td><code>large-v3</code></td>
+                            <td>3 GB</td>
+                            <td>
+                                <div class="speed-bar">
+                                    <div class="speed-fill" style="width: 20%"></div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="accuracy-bar">
+                                    <div class="accuracy-fill" style="width: 100%"></div>
+                                </div>
+                            </td>
+                            <td>Maximum accuracy</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="model-note">
+                Models download automatically on first use. GPU acceleration recommended for medium and large models.
+            </p>
+        </div>
+    </section>
+
+    <!-- Install Section -->
+    <section id="install" class="install">
+        <div class="container">
+            <h2>Installation</h2>
+            <p class="section-subtitle">Get up and running in minutes</p>
+
+            <div class="install-tabs">
+                <button class="tab-btn active" data-tab="arch">Arch Linux</button>
+                <button class="tab-btn" data-tab="debian">Debian/Ubuntu</button>
+                <button class="tab-btn" data-tab="fedora">Fedora</button>
+            </div>
+
+            <div class="install-content">
+                <div id="arch" class="tab-content active">
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span>Install dependencies</span>
+                            <button class="copy-btn" data-copy="yay -S ffmpeg pulseaudio-utils python ollama">Copy</button>
+                        </div>
+                        <pre><code><span class="comment"># Install system dependencies</span>
+yay -S ffmpeg pulseaudio-utils python ollama
+
+<span class="comment"># Or for PipeWire</span>
+yay -S ffmpeg pipewire-pulse python ollama</code></pre>
+                    </div>
+                </div>
+
+                <div id="debian" class="tab-content">
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span>Install dependencies</span>
+                            <button class="copy-btn">Copy</button>
+                        </div>
+                        <pre><code><span class="comment"># Install system dependencies</span>
+sudo apt install ffmpeg pulseaudio-utils python3 python3-venv
+
+<span class="comment"># Install Ollama</span>
+curl -fsSL https://ollama.com/install.sh | sh</code></pre>
+                    </div>
+                </div>
+
+                <div id="fedora" class="tab-content">
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span>Install dependencies</span>
+                            <button class="copy-btn">Copy</button>
+                        </div>
+                        <pre><code><span class="comment"># Install system dependencies</span>
+sudo dnf install ffmpeg pulseaudio-utils python3
+
+<span class="comment"># Install Ollama</span>
+curl -fsSL https://ollama.com/install.sh | sh</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <div class="post-install">
+                <h3>Setup HushNote</h3>
+                <div class="code-block">
+                    <pre><code><span class="comment"># Clone the repository</span>
+git clone https://github.com/peteonrails/hushnote.git
+cd hushnote
+
+<span class="comment"># Create virtual environment and install dependencies</span>
+python -m venv venv
+./venv/bin/pip install -r requirements.txt
+
+<span class="comment"># Pull an Ollama model for summarization</span>
+ollama pull llama3.1:8b
+
+<span class="comment"># Test the installation</span>
+./hushnote --help
+
+<span class="comment"># Record, transcribe, and summarize a meeting</span>
+./hushnote full --diarize --speakers 3</code></pre>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Use Cases Section -->
+    <section id="usecases" class="usecases">
+        <div class="container">
+            <h2>Use Cases</h2>
+            <p class="section-subtitle">HushNote adapts to your workflow</p>
+
+            <div class="usecase-grid">
+                <div class="usecase-card">
+                    <div class="usecase-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                            <line x1="16" y1="2" x2="16" y2="6"/>
+                            <line x1="8" y1="2" x2="8" y2="6"/>
+                            <line x1="3" y1="10" x2="21" y2="10"/>
+                        </svg>
+                    </div>
+                    <h3>Meeting Notes</h3>
+                    <p>Automatically generate summaries, action items, and decisions from team meetings.</p>
+                </div>
+
+                <div class="usecase-card">
+                    <div class="usecase-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                        </svg>
+                    </div>
+                    <h3>Interviews</h3>
+                    <p>Transcribe interviews with speaker attribution for easy reference and analysis.</p>
+                </div>
+
+                <div class="usecase-card">
+                    <div class="usecase-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+                            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+                        </svg>
+                    </div>
+                    <h3>Lectures</h3>
+                    <p>Create searchable transcripts from lectures and educational content for study.</p>
+                </div>
+
+                <div class="usecase-card">
+                    <div class="usecase-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polygon points="10 8 16 12 10 16 10 8"/>
+                        </svg>
+                    </div>
+                    <h3>Accessibility</h3>
+                    <p>Generate captions and subtitles in SRT/VTT format for video content.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta">
+        <div class="container">
+            <h2>Ready to try HushNote?</h2>
+            <p>Keep your meetings private. Start transcribing locally today.</p>
+            <div class="cta-buttons">
+                <a href="#install" class="btn btn-primary btn-large">Get Started</a>
+                <a href="https://github.com/peteonrails/hushnote" class="btn btn-secondary btn-large">View Source</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <a href="#" class="footer-logo">
+                        <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                            <line x1="12" y1="19" x2="12" y2="23"/>
+                            <line x1="8" y1="23" x2="16" y2="23"/>
+                            <line x1="5" y1="3" x2="19" y2="21" stroke-width="2.5"/>
+                        </svg>
+                        <span>HushNote</span>
+                    </a>
+                    <p>Privacy-first meeting transcription for Linux</p>
+                </div>
+
+                <div class="footer-links">
+                    <div class="footer-column">
+                        <h4>Documentation</h4>
+                        <a href="https://github.com/peteonrails/hushnote#installation">Installation</a>
+                        <a href="https://github.com/peteonrails/hushnote#quick-start">Quick Start</a>
+                        <a href="https://github.com/peteonrails/hushnote/blob/main/DIARIZATION.md">Diarization Guide</a>
+                    </div>
+
+                    <div class="footer-column">
+                        <h4>Community</h4>
+                        <a href="https://github.com/peteonrails/hushnote">GitHub</a>
+                        <a href="https://github.com/peteonrails/hushnote/issues">Issues</a>
+                        <a href="https://github.com/peteonrails/hushnote/discussions">Discussions</a>
+                    </div>
+
+                    <div class="footer-column">
+                        <h4>Legal</h4>
+                        <a href="https://github.com/peteonrails/hushnote/blob/main/LICENSE">MIT License</a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="footer-bottom">
+                <p>&copy; 2024 HushNote. Open source under the MIT License.</p>
+                <p class="tagline">Because your words are your business.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+</body>
+</html>
