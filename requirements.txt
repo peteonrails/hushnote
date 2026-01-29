@@ -1,0 +1,7 @@
+requests
+openai-whisper
+faster-whisper
+faster-whisper[gpu]
+pyannote.audio
+torch
+huggingface-hub
