@@ -1,22 +1,47 @@
 #!/usr/bin/env python3
 
 """
-Transcription script using openai-whisper
+Transcription script using faster-whisper
 Transcribes audio files to text with timestamps
 """
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
+# libcublas lives inside Ollama's dir on this system; set before importing ctranslate2
+_CUDA_LIBS = "/usr/local/lib/ollama/cuda_v12"
+if _CUDA_LIBS not in os.environ.get("LD_LIBRARY_PATH", ""):
+    os.environ["LD_LIBRARY_PATH"] = _CUDA_LIBS + ":" + os.environ.get("LD_LIBRARY_PATH", "")
+
 try:
-    import whisper
-    import torch
+    from faster_whisper import WhisperModel
 except ImportError:
-    print("Error: openai-whisper not installed", file=sys.stderr)
-    print("Install with: pip install openai-whisper", file=sys.stderr)
+    print("Error: faster-whisper not installed", file=sys.stderr)
+    print("Install with: pip install faster-whisper", file=sys.stderr)
     sys.exit(1)
+
+
+def unload_ollama(ollama_url: str = "http://localhost:11434"):
+    """Unload Ollama models to free VRAM before loading Whisper."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(f"{ollama_url}/api/ps")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        for m in data.get("models", []):
+            payload = json.dumps({"model": m["name"], "keep_alive": 0}).encode()
+            req = urllib.request.Request(
+                f"{ollama_url}/api/generate",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=10)
+            print(f"Unloaded Ollama model: {m['name']}", file=sys.stderr)
+    except Exception:
+        pass
 
 
 def transcribe_audio(
@@ -24,55 +49,73 @@ def transcribe_audio(
     model_size: str = "base",
     device: str = "auto",
     language: str = None,
-    output_format: str = "txt"
+    output_format: str = "txt",
+    ollama_url: str = "http://localhost:11434",
 ) -> dict:
     """
-    Transcribe an audio file using openai-whisper
+    Transcribe an audio file using faster-whisper.
 
     Args:
         audio_file: Path to audio file
-        model_size: Whisper model size (tiny, base, small, medium, large-v3, turbo)
+        model_size: Whisper model size (tiny, base, small, medium, large-v3)
         device: Device to use (cpu, cuda, auto)
         language: Language code (None for auto-detect)
         output_format: Output format (txt, json, srt, vtt)
+        ollama_url: Ollama API base URL
 
     Returns:
         dict with transcription results
     """
-    # Determine device
     if device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    print(f"Loading Whisper model: {model_size} on {device}", file=sys.stderr)
-    model = whisper.load_model(model_size, device=device)
+        unload_ollama(ollama_url)
+        try:
+            model = WhisperModel(model_size, device="cuda", compute_type="float16")
+            print(f"Loading Whisper model: {model_size} on cuda", file=sys.stderr)
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                print("GPU OOM, falling back to CPU...", file=sys.stderr)
+                model = WhisperModel(model_size, device="cpu", compute_type="int8")
+            else:
+                raise
+    elif device == "cuda":
+        unload_ollama(ollama_url)
+        model = WhisperModel(model_size, device="cuda", compute_type="float16")
+        print(f"Loading Whisper model: {model_size} on cuda", file=sys.stderr)
+    else:
+        model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        print(f"Loading Whisper model: {model_size} on cpu", file=sys.stderr)
 
     print(f"Transcribing: {audio_file}", file=sys.stderr)
-    result = model.transcribe(
-        audio_file,
-        language=language,
-        verbose=False
-    )
 
-    print(f"Detected language: {result['language']}", file=sys.stderr)
+    kwargs = {"beam_size": 5}
+    if language:
+        kwargs["language"] = language
 
-    # Reformat segments to match our expected format
+    segments, info = model.transcribe(str(audio_file), **kwargs)
+    print(f"Detected language: {info.language} ({info.language_probability:.0%})", file=sys.stderr)
+
     all_segments = []
-    for segment in result["segments"]:
+    full_text_parts = []
+    print("Transcribing", end="", flush=True, file=sys.stderr)
+    for seg in segments:
         all_segments.append({
-            "start": segment["start"],
-            "end": segment["end"],
-            "text": segment["text"].strip()
+            "start": seg.start,
+            "end": seg.end,
+            "text": seg.text.strip(),
         })
+        full_text_parts.append(seg.text.strip())
+        print(".", end="", flush=True, file=sys.stderr)
+    print(" done.", file=sys.stderr)
 
     return {
-        "language": result["language"],
+        "language": info.language,
         "segments": all_segments,
-        "text": result["text"]
+        "text": " ".join(full_text_parts),
     }
 
 
 def format_timestamp(seconds: float) -> str:
-    """Format seconds to SRT timestamp format"""
+    """Format seconds to SRT timestamp format."""
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)
@@ -81,11 +124,16 @@ def format_timestamp(seconds: float) -> str:
 
 
 def save_transcription(result: dict, output_file: str, format: str):
-    """Save transcription in specified format"""
+    """Save transcription in the specified format."""
     output_path = Path(output_file)
 
     if format == "txt":
-        output_path.write_text(result["text"])
+        lines = []
+        for seg in result["segments"]:
+            mins = int(seg["start"] // 60)
+            secs = seg["start"] % 60
+            lines.append(f"[{mins:02d}:{secs:05.2f}] {seg['text']}")
+        output_path.write_text("\n".join(lines))
 
     elif format == "json":
         output_path.write_text(json.dumps(result, indent=2))
@@ -111,52 +159,45 @@ def save_transcription(result: dict, output_file: str, format: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Transcribe audio using openai-whisper")
+    parser = argparse.ArgumentParser(description="Transcribe audio using faster-whisper")
     parser.add_argument("audio_file", help="Path to audio file")
-    parser.add_argument("-m", "--model", default="base",
-                       choices=["tiny", "base", "small", "medium", "large-v3", "turbo"],
-                       help="Whisper model size (default: base)")
-    parser.add_argument("-d", "--device", default="auto",
-                       choices=["cpu", "cuda", "auto"],
-                       help="Device to use (default: auto)")
+    parser.add_argument(
+        "-m", "--model", default="base",
+        choices=["tiny", "base", "small", "medium", "large-v3"],
+        help="Whisper model size (default: base)",
+    )
+    parser.add_argument(
+        "-d", "--device", default="auto",
+        choices=["cpu", "cuda", "auto"],
+        help="Device to use (default: auto)",
+    )
     parser.add_argument("-l", "--language", default=None,
-                       help="Language code (default: auto-detect)")
-    parser.add_argument("-f", "--format", default="txt",
-                       choices=["txt", "json", "srt", "vtt"],
-                       help="Output format (default: txt)")
-    parser.add_argument("-o", "--output",
-                       help="Output file (default: audio_file.txt)")
+                        help="Language code (default: auto-detect)")
+    parser.add_argument(
+        "-f", "--format", default="txt",
+        choices=["txt", "json", "srt", "vtt"],
+        help="Output format (default: txt)",
+    )
+    parser.add_argument("-o", "--output", help="Output file (default: audio_file.txt)")
 
     args = parser.parse_args()
 
-    # Check if audio file exists
     if not Path(args.audio_file).exists():
         print(f"Error: Audio file not found: {args.audio_file}", file=sys.stderr)
         sys.exit(1)
 
-    # Determine output file
-    if args.output:
-        output_file = args.output
-    else:
-        audio_path = Path(args.audio_file)
-        output_file = audio_path.with_suffix(f".{args.format}")
+    output_file = args.output or str(Path(args.audio_file).with_suffix(f".{args.format}"))
 
-    # Transcribe
     try:
         result = transcribe_audio(
             args.audio_file,
             model_size=args.model,
             device=args.device,
             language=args.language,
-            output_format=args.format
+            output_format=args.format,
         )
-
-        # Save results
         save_transcription(result, output_file, args.format)
-
-        # Print summary
-        print(f"\nTranscription complete!", file=sys.stderr)
-        print(f"Segments: {len(result['segments'])}", file=sys.stderr)
+        print(f"\nTranscription complete! Segments: {len(result['segments'])}", file=sys.stderr)
 
     except Exception as e:
         print(f"Error during transcription: {e}", file=sys.stderr)
