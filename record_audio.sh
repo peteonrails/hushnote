@@ -60,32 +60,57 @@ done
 # Create output directory
 mkdir -p "$(dirname "$OUTPUT_FILE")"
 
-# Get default audio source (microphone)
-DEFAULT_SOURCE=$(pactl get-default-source)
+# Determine audio source.
+# AUDIO_SOURCE env var overrides everything.
+# AUDIO_SOURCE_TYPE controls what to capture:
+#   "microphone" (default) - default PulseAudio/PipeWire source (mic)
+#   "monitor"              - monitor of default sink (captures output audio,
+#                            needed for meeting audio on BT headsets)
+if [ -n "${AUDIO_SOURCE:-}" ]; then
+    RECORD_SOURCE="$AUDIO_SOURCE"
+elif [ "${AUDIO_SOURCE_TYPE:-microphone}" = "monitor" ]; then
+    RECORD_SOURCE="$(pactl get-default-sink).monitor"
+else
+    RECORD_SOURCE="$(pactl get-default-source)"
+fi
 
 echo "Recording audio..." >&2
 echo "Output file: $OUTPUT_FILE" >&2
-echo "Audio source: $DEFAULT_SOURCE" >&2
+echo "Audio source: $RECORD_SOURCE" >&2
 if [ -n "$DURATION" ]; then
     echo "Duration: ${DURATION}s" >&2
 fi
 echo "" >&2
 echo "Press Ctrl+C to stop recording" >&2
 
-# Build ffmpeg command
-FFMPEG_CMD="ffmpeg -f pulse -i $DEFAULT_SOURCE"
+# RECORD_BACKEND controls the recording tool:
+#   "ffmpeg" (default) - ffmpeg with PulseAudio compat layer
+#   "pw-record"        - pw-record, talks directly to PipeWire graph;
+#                        required for BT headsets in HSP/HFP mode where
+#                        ffmpeg -f pulse captures silence
+RECORD_BACKEND="${RECORD_BACKEND:-ffmpeg}"
 
-if [ -n "$DURATION" ]; then
-    FFMPEG_CMD="$FFMPEG_CMD -t $DURATION"
+if [ "$RECORD_BACKEND" = "pw-record" ]; then
+    PW_CMD="pw-record --target $RECORD_SOURCE --rate 16000 --channels 1 --format s16"
+    if [ -n "$DURATION" ]; then
+        PW_CMD="timeout $DURATION $PW_CMD"
+    fi
+    PW_CMD="$PW_CMD $OUTPUT_FILE"
+    set +e
+    eval $PW_CMD >&2
+    ffmpeg_exit_code=$?
+    set -e
+else
+    FFMPEG_CMD="ffmpeg -f pulse -i $RECORD_SOURCE"
+    if [ -n "$DURATION" ]; then
+        FFMPEG_CMD="$FFMPEG_CMD -t $DURATION"
+    fi
+    FFMPEG_CMD="$FFMPEG_CMD -ar 16000 -ac 1 -c:a pcm_s16le $OUTPUT_FILE"
+    set +e
+    eval $FFMPEG_CMD >&2
+    ffmpeg_exit_code=$?
+    set -e
 fi
-
-FFMPEG_CMD="$FFMPEG_CMD -ar 16000 -ac 1 -c:a pcm_s16le $OUTPUT_FILE"
-
-# Start recording (allow CTRL-C to stop gracefully)
-set +e
-eval $FFMPEG_CMD >&2
-ffmpeg_exit_code=$?
-set -e
 
 # Always output filename if file was created, even if interrupted
 if [ -f "$OUTPUT_FILE" ]; then
