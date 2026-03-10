@@ -66,17 +66,26 @@ mkdir -p "$(dirname "$OUTPUT_FILE")"
 #   "microphone" (default) - default PulseAudio/PipeWire source (mic)
 #   "monitor"              - monitor of default sink (captures output audio,
 #                            needed for meeting audio on BT headsets)
+#   "both"                 - mix microphone + sink monitor into one recording
+#                            (captures both sides of a call)
 if [ -n "${AUDIO_SOURCE:-}" ]; then
     RECORD_SOURCE="$AUDIO_SOURCE"
+    AUDIO_SOURCE_TYPE="microphone"  # treat explicit source as single source
 elif [ "${AUDIO_SOURCE_TYPE:-microphone}" = "monitor" ]; then
     RECORD_SOURCE="$(pactl get-default-sink).monitor"
+elif [ "${AUDIO_SOURCE_TYPE:-microphone}" = "both" ]; then
+    RECORD_SOURCE=""  # handled separately below
 else
     RECORD_SOURCE="$(pactl get-default-source)"
 fi
 
 echo "Recording audio..." >&2
 echo "Output file: $OUTPUT_FILE" >&2
-echo "Audio source: $RECORD_SOURCE" >&2
+if [ -n "$RECORD_SOURCE" ]; then
+    echo "Audio source: $RECORD_SOURCE" >&2
+else
+    echo "Audio source: mic + output mix" >&2
+fi
 if [ -n "$DURATION" ]; then
     echo "Duration: ${DURATION}s" >&2
 fi
@@ -90,27 +99,47 @@ echo "Press Ctrl+C to stop recording" >&2
 #                        ffmpeg -f pulse captures silence
 RECORD_BACKEND="${RECORD_BACKEND:-ffmpeg}"
 
-if [ "$RECORD_BACKEND" = "pw-record" ]; then
-    PW_CMD="pw-record --target $RECORD_SOURCE --rate 16000 --channels 1 --format s16"
-    if [ -n "$DURATION" ]; then
-        PW_CMD="timeout $DURATION $PW_CMD"
-    fi
-    PW_CMD="$PW_CMD $OUTPUT_FILE"
-    set +e
-    eval $PW_CMD >&2
+set +e
+ffmpeg_exit_code=0
+
+if [ "${AUDIO_SOURCE_TYPE:-microphone}" = "both" ]; then
+    # Mix microphone and sink monitor into a single recording using ffmpeg.
+    # Two inputs: the default source (mic) and the default sink monitor.
+    MIC_SOURCE="$(pactl get-default-source)"
+    MONITOR_SOURCE="$(pactl get-default-sink).monitor"
+    echo "Mixing mic ($MIC_SOURCE) + monitor ($MONITOR_SOURCE)" >&2
+
+    FFMPEG_ARGS=(
+        -f pulse -i "$MIC_SOURCE"
+        -f pulse -i "$MONITOR_SOURCE"
+        -filter_complex amix=inputs=2:duration=longest
+        -ar 16000 -ac 1 -c:a pcm_s16le
+    )
+    [ -n "$DURATION" ] && FFMPEG_ARGS+=(-t "$DURATION")
+    FFMPEG_ARGS+=("$OUTPUT_FILE")
+
+    ffmpeg "${FFMPEG_ARGS[@]}" >&2
     ffmpeg_exit_code=$?
-    set -e
+
+elif [ "$RECORD_BACKEND" = "pw-record" ]; then
+    PW_ARGS=(--target "$RECORD_SOURCE" --rate 16000 --channels 1 --format s16)
+    if [ -n "$DURATION" ]; then
+        timeout "$DURATION" pw-record "${PW_ARGS[@]}" "$OUTPUT_FILE" >&2
+    else
+        pw-record "${PW_ARGS[@]}" "$OUTPUT_FILE" >&2
+    fi
+    ffmpeg_exit_code=$?
+
 else
-    FFMPEG_CMD="ffmpeg -f pulse -i $RECORD_SOURCE"
-    if [ -n "$DURATION" ]; then
-        FFMPEG_CMD="$FFMPEG_CMD -t $DURATION"
-    fi
-    FFMPEG_CMD="$FFMPEG_CMD -ar 16000 -ac 1 -c:a pcm_s16le $OUTPUT_FILE"
-    set +e
-    eval $FFMPEG_CMD >&2
+    FFMPEG_ARGS=(-f pulse -i "$RECORD_SOURCE")
+    [ -n "$DURATION" ] && FFMPEG_ARGS+=(-t "$DURATION")
+    FFMPEG_ARGS+=(-ar 16000 -ac 1 -c:a pcm_s16le "$OUTPUT_FILE")
+
+    ffmpeg "${FFMPEG_ARGS[@]}" >&2
     ffmpeg_exit_code=$?
-    set -e
 fi
+
+set -e
 
 # Always output filename if file was created, even if interrupted
 if [ -f "$OUTPUT_FILE" ]; then
