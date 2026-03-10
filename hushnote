@@ -18,6 +18,7 @@ fi
 
 OUTPUT_DIR="${RECORDINGS_DIR:-${SCRIPT_DIR}/recordings}"
 WHISPER_MODEL="${WHISPER_MODEL:-base}"
+WHISPER_LANGUAGE="${WHISPER_LANGUAGE:-}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.1:8b}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 DEBUG="${DEBUG:-false}"
@@ -51,6 +52,7 @@ Commands:
 Options:
     -d, --duration SEC  Recording duration in seconds (default: manual stop with Ctrl+C)
     -m, --model MODEL   Whisper model size: tiny, base, small, medium, large-v3 (default: base)
+    -l, --language LANG Language code for transcription, e.g. nl, en (default: auto-detect)
     -o, --ollama MODEL  Ollama model for summarization (default: llama3.1:8b)
     -f, --format FMT    Output format: txt, json, srt, vtt, md (default: txt for transcribe, md for summarize)
     -s, --speakers NUM  Number of speakers (for diarization)
@@ -195,6 +197,7 @@ transcribe_meeting() {
     shift
 
     local model="$WHISPER_MODEL"
+    local language="$WHISPER_LANGUAGE"
     local format="txt"
     local output=""
 
@@ -202,6 +205,10 @@ transcribe_meeting() {
         case $1 in
             -m|--model)
                 model="$2"
+                shift 2
+                ;;
+            -l|--language)
+                language="$2"
                 shift 2
                 ;;
             -f|--format)
@@ -225,8 +232,10 @@ transcribe_meeting() {
 
     log_info "Transcribing audio file: $audio_file"
     log_info "Using Whisper model: $model"
+    [ -n "$language" ] && log_info "Language: $language"
 
     local cmd="\"$PYTHON\" \"${SCRIPT_DIR}/transcribe.py\" \"$audio_file\" -m $model -f $format"
+    [ -n "$language" ] && cmd="$cmd -l $language"
     [ -n "$output" ] && cmd="$cmd -o \"$output\""
 
     eval $cmd
@@ -302,6 +311,7 @@ full_workflow() {
     # Parse arguments for full workflow
     local duration=""
     local whisper_model="$WHISPER_MODEL"
+    local whisper_language="$WHISPER_LANGUAGE"
     local ollama_model="$OLLAMA_MODEL"
     local format=""
     local enable_diarization=false
@@ -319,6 +329,10 @@ full_workflow() {
                 ;;
             -m|--model)
                 whisper_model="$2"
+                shift 2
+                ;;
+            -l|--language)
+                whisper_language="$2"
                 shift 2
                 ;;
             -o|--ollama)
@@ -547,11 +561,10 @@ full_workflow() {
         # Step 2: Transcribe
         log_info "Step 2/3: Transcribing audio..."
         local transcription_file
-        if [ -n "$whisper_model" ]; then
-            transcription_file=$(transcribe_meeting "$audio_file" -m "$whisper_model" 2>&1 | tail -1)
-        else
-            transcription_file=$(transcribe_meeting "$audio_file" 2>&1 | tail -1)
-        fi
+        local transcribe_args=()
+        [ -n "$whisper_model" ] && transcribe_args+=(-m "$whisper_model")
+        [ -n "$whisper_language" ] && transcribe_args+=(-l "$whisper_language")
+        transcription_file=$(transcribe_meeting "$audio_file" "${transcribe_args[@]}")
 
         log_debug "Transcription file captured: [$transcription_file]"
 
@@ -752,10 +765,11 @@ compress_audio() {
 
     log_info "Compressing audio: $audio_file"
 
-    local cmd="\"${SCRIPT_DIR}/compress.sh\" \"$audio_file\""
-    [ "$delete_wav" = true ] && cmd="$cmd --delete-wav"
+    local compress_args=("${SCRIPT_DIR}/compress.sh" "$audio_file")
+    [ "$delete_wav" = true ] && compress_args+=(--delete-wav)
 
-    local mp3_file=$(eval $cmd)
+    local mp3_file
+    mp3_file=$("${compress_args[@]}")
 
     if [ -n "$mp3_file" ] && [ -f "$mp3_file" ]; then
         log_success "Compression complete: $mp3_file"
@@ -970,6 +984,7 @@ main() {
 
             # Parse arguments
             local whisper_model="$WHISPER_MODEL"
+            local whisper_language="$WHISPER_LANGUAGE"
             local ollama_model="$OLLAMA_MODEL"
             local enable_diarization=false
             local num_speakers=""
@@ -981,6 +996,10 @@ main() {
                 case $1 in
                     -m|--model)
                         whisper_model="$2"
+                        shift 2
+                        ;;
+                    -l|--language)
+                        whisper_language="$2"
                         shift 2
                         ;;
                     -o|--ollama)
@@ -1037,7 +1056,9 @@ main() {
                 local base="${audio_file%.*}"
                 local transcription_json="${base}.json"
 
-                "$PYTHON" "${SCRIPT_DIR}/transcribe.py" "$audio_file" -m "$whisper_model" -f json -o "$transcription_json"
+                local transcribe_cmd=("$PYTHON" "${SCRIPT_DIR}/transcribe.py" "$audio_file" -m "$whisper_model" -f json -o "$transcription_json")
+                [ -n "$whisper_language" ] && transcribe_cmd+=(-l "$whisper_language")
+                "${transcribe_cmd[@]}"
 
                 if [ ! -f "$transcription_json" ]; then
                     log_error "Transcription failed"
@@ -1136,7 +1157,9 @@ main() {
                 log_info "Processing recording: $audio_file"
                 echo ""
 
-                local transcription_file=$(transcribe_meeting "$audio_file" -m "$whisper_model")
+                local process_transcribe_args=(-m "$whisper_model")
+                [ -n "$whisper_language" ] && process_transcribe_args+=(-l "$whisper_language")
+                local transcription_file=$(transcribe_meeting "$audio_file" "${process_transcribe_args[@]}")
 
                 if [ -f "$transcription_file" ]; then
                     local summary_file
