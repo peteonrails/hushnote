@@ -24,6 +24,7 @@ OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 PROCESS_TIMEOUT="${PROCESS_TIMEOUT:-7200}"  # Max seconds for process/process-last (default: 2h)
 TRIM_NOISE_DB="${TRIM_NOISE_DB:--35}"       # dB threshold for silence detection (default: -35)
 TRIM_MIN_SILENCE="${TRIM_MIN_SILENCE:-60}"  # Minimum silence duration in seconds (default: 60)
+POST_SUMMARY_HOOK="${POST_SUMMARY_HOOK:-}"  # Script to run after summary is created; receives summary path as $1
 DEBUG="${DEBUG:-false}"
 PYTHON="${SCRIPT_DIR}/venv/bin/python3"
 
@@ -53,7 +54,7 @@ Commands:
     process-last        Process most recent recording (transcribe + diarize + summarize)
     list               List all recordings
     status             Show status of all recordings (what needs processing)
-    catchup            Process all unfinished recordings; optionally upload to Outline (--upload)
+    catchup            Process all unfinished recordings and run post-summary hook
 
 Options:
     -d, --duration SEC  Recording duration in seconds (default: manual stop with Ctrl+C)
@@ -81,6 +82,7 @@ Environment Variables:
     PROCESS_TIMEOUT     Max seconds for process/process-last before auto-kill (default: 7200)
     TRIM_NOISE_DB       Silence threshold in dB for tail trimming (default: -35)
     TRIM_MIN_SILENCE    Minimum silence duration in seconds to consider a tail (default: 60)
+    POST_SUMMARY_HOOK   Executable to run after summary is created; receives summary path as \$1
     DEBUG               Enable debug output (set to 'true' to enable)
 
 Examples:
@@ -677,6 +679,9 @@ full_workflow() {
         [ -n "$mp3_file" ] && [ -f "$mp3_file" ] && echo "  Audio (full):       $mp3_file"
         echo "  Transcription:      $transcription_file"
         echo "  Summary:            $summary_file"
+
+        run_post_summary_hook "$summary_file" && \
+            touch "${summary_file%_summary.md}.hook_done" || true
     fi
 }
 
@@ -1087,17 +1092,37 @@ list_recordings() {
     fi
 }
 
+run_post_summary_hook() {
+    local summary_file="$1"
+
+    if [ -z "$POST_SUMMARY_HOOK" ]; then
+        return 0
+    fi
+
+    if [ ! -x "$POST_SUMMARY_HOOK" ]; then
+        log_warn "POST_SUMMARY_HOOK is set but not executable: $POST_SUMMARY_HOOK"
+        return 1
+    fi
+
+    log_info "Running post-summary hook: $POST_SUMMARY_HOOK"
+    "$POST_SUMMARY_HOOK" "$summary_file"
+    local exit_code=$?
+
+    if [ $exit_code -ne 0 ]; then
+        log_warn "Post-summary hook exited with code $exit_code"
+        return 1
+    fi
+
+    log_success "Post-summary hook completed"
+    return 0
+}
+
 catchup_recordings() {
-    local do_upload=false
     local dry_run=false
     local process_args=()
 
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --upload)
-                do_upload=true
-                shift
-                ;;
             --dry-run)
                 dry_run=true
                 shift
@@ -1115,7 +1140,7 @@ catchup_recordings() {
         exit 0
     fi
 
-    local pending=0 uploaded=0 skipped=0 failed=0
+    local processed=0 hooked=0 failed=0
 
     for date_dir in "$OUTPUT_DIR"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]; do
         [ -d "$date_dir" ] || continue
@@ -1129,9 +1154,8 @@ catchup_recordings() {
 
             local wav_file="${base}.wav"
             local mp3_file="${base}.mp3"
-            local txt_file="${base}.txt"
             local summary_file="${base}_summary.md"
-            local outline_file="${base}.outline_url"
+            local hook_done_file="${base}.hook_done"
 
             # Determine title for log messages
             local title="$base_name"
@@ -1155,8 +1179,8 @@ except Exception:
                 [ -f "$wav_file" ] && audio_file="$wav_file"
                 [ -f "$mp3_file" ] && [ -z "$audio_file" ] && audio_file="$mp3_file"
 
-                log_info "[$title] Needs processing: $audio_file"
-                pending=$((pending + 1))
+                log_info "[$title] Needs processing: $(basename "$audio_file")"
+                processed=$((processed + 1))
 
                 if [ "$dry_run" = true ]; then
                     continue
@@ -1170,7 +1194,6 @@ except Exception:
                     continue
                 fi
 
-                # Re-check summary was produced
                 if [ ! -f "$summary_file" ]; then
                     log_warn "[$title] Processing finished but no summary found"
                     failed=$((failed + 1))
@@ -1178,27 +1201,21 @@ except Exception:
                 fi
             fi
 
-            # Case 2: has summary but no outline_url → needs upload
-            if [ -f "$summary_file" ] && [ ! -f "$outline_file" ] && [ "$do_upload" = true ]; then
-                log_info "[$title] Uploading to Outline..."
+            # Case 2: has summary but hook hasn't run → run hook
+            if [ -f "$summary_file" ] && [ ! -f "$hook_done_file" ] && [ -n "$POST_SUMMARY_HOOK" ]; then
+                log_info "[$title] Running post-summary hook..."
 
                 if [ "$dry_run" = true ]; then
+                    hooked=$((hooked + 1))
                     continue
                 fi
 
-                if ! command -v hushnote-to-outline &>/dev/null; then
-                    log_warn "hushnote-to-outline not found on PATH, skipping upload"
-                    skipped=$((skipped + 1))
-                    continue
-                fi
-
-                local url
-                url=$(hushnote-to-outline "$summary_file" 2>/dev/null)
-                if [ $? -eq 0 ] && [ -n "$url" ]; then
-                    log_success "[$title] Uploaded: $url"
-                    uploaded=$((uploaded + 1))
+                if run_post_summary_hook "$summary_file"; then
+                    # Write marker so we don't re-run on next catchup
+                    touch "$hook_done_file"
+                    hooked=$((hooked + 1))
                 else
-                    log_warn "[$title] Upload failed"
+                    log_warn "[$title] Hook failed"
                     failed=$((failed + 1))
                 fi
             fi
@@ -1207,9 +1224,9 @@ except Exception:
 
     echo ""
     if [ "$dry_run" = true ]; then
-        log_info "Dry run — $pending meeting(s) would be processed"
+        log_info "Dry run — would process: $processed, run hook: $hooked"
     else
-        log_success "Catchup complete — processed: $pending, uploaded: $uploaded, skipped: $skipped, failed: $failed"
+        log_success "Catchup complete — processed: $processed, hook ran: $hooked, failed: $failed"
     fi
 }
 
@@ -1252,14 +1269,14 @@ status_recordings() {
             local txt_file="${base}.txt"
             local summary_file="${base}_summary.md"
             local metadata_file="${base}_metadata.json"
-            local outline_file="${base}.outline_url"
+            local hook_done_file="${base}.hook_done"
 
-            local has_wav=false has_mp3=false has_txt=false has_summary=false has_outline=false
-            [ -f "$wav_file" ]     && has_wav=true
-            [ -f "$mp3_file" ]     && has_mp3=true
-            [ -f "$txt_file" ]     && has_txt=true
-            [ -f "$summary_file" ] && has_summary=true
-            [ -f "$outline_file" ] && has_outline=true
+            local has_wav=false has_mp3=false has_txt=false has_summary=false has_hook_done=false
+            [ -f "$wav_file" ]       && has_wav=true
+            [ -f "$mp3_file" ]       && has_mp3=true
+            [ -f "$txt_file" ]       && has_txt=true
+            [ -f "$summary_file" ]   && has_summary=true
+            [ -f "$hook_done_file" ] && has_hook_done=true
 
             # Skip dirs with no recognisable audio at all and no txt either
             if ! $has_wav && ! $has_mp3 && ! $has_txt; then
@@ -1270,12 +1287,16 @@ status_recordings() {
 
             # Determine status
             local status_text status_color
-            if $has_summary && $has_outline; then
-                status_text="done + uploaded"
+            if $has_summary && $has_hook_done; then
+                status_text="done + hook ran"
                 status_color="$GREEN"
                 done_uploaded=$((done_uploaded + 1))
             elif $has_summary; then
-                status_text="done, not uploaded"
+                if [ -n "$POST_SUMMARY_HOOK" ]; then
+                    status_text="done, hook pending"
+                else
+                    status_text="done"
+                fi
                 status_color="$GREEN"
                 done_local=$((done_local + 1))
             elif $has_txt; then
@@ -1727,6 +1748,9 @@ main() {
                     [ -n "$mp3_file" ]     && [ -f "$mp3_file" ]     && echo "  Audio (full):     $mp3_file"
                     echo "  Transcription:    $transcription_file"
                     echo "  Summary:          $summary_file"
+
+                    run_post_summary_hook "$summary_file" && \
+                        touch "${summary_file%_summary.md}.hook_done" || true
                 fi
             fi
             ) &
