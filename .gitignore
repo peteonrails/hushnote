@@ -31,7 +31,6 @@ recordings/
 
 # Transcriptions
 *.txt
-!/requirements.txt
 *.json
 *.srt
 *.vtt
