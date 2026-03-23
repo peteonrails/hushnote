@@ -61,6 +61,12 @@
 # Example using the bundled hushnote-to-outline script:
 #POST_SUMMARY_HOOK="${HOME}/.local/bin/hushnote-to-outline"
 
+# Notification command override. By default hushnote uses dunstify (if available)
+# with replace-by-ID so reminders update in place, falling back to notify-send.
+# Set this to use a different notifier, e.g. mako, fnott, or a custom script.
+# Will be called as: $NOTIFY_CMD "summary" "body"
+#NOTIFY_CMD=notify-send
+
 # HuggingFace API token — required for speaker diarization (pyannote models).
 # Create a token at https://huggingface.co/settings/tokens
 # Accept model conditions at https://huggingface.co/pyannote/speaker-diarization-3.1
