@@ -53,6 +53,7 @@ Commands:
     process-last        Process most recent recording (transcribe + diarize + summarize)
     list               List all recordings
     status             Show status of all recordings (what needs processing)
+    catchup            Process all unfinished recordings; optionally upload to Outline (--upload)
 
 Options:
     -d, --duration SEC  Recording duration in seconds (default: manual stop with Ctrl+C)
@@ -1086,6 +1087,132 @@ list_recordings() {
     fi
 }
 
+catchup_recordings() {
+    local do_upload=false
+    local dry_run=false
+    local process_args=()
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --upload)
+                do_upload=true
+                shift
+                ;;
+            --dry-run)
+                dry_run=true
+                shift
+                ;;
+            *)
+                # Pass remaining args through to process (e.g. --no-trim, -m small)
+                process_args+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    if [ ! -d "$OUTPUT_DIR" ]; then
+        log_warn "No recordings directory found: $OUTPUT_DIR"
+        exit 0
+    fi
+
+    local pending=0 uploaded=0 skipped=0 failed=0
+
+    for date_dir in "$OUTPUT_DIR"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]; do
+        [ -d "$date_dir" ] || continue
+
+        for meeting_dir in "$date_dir"/meeting_*; do
+            [ -d "$meeting_dir" ] || continue
+
+            local base_name
+            base_name=$(basename "$meeting_dir")
+            local base="${meeting_dir}/${base_name}"
+
+            local wav_file="${base}.wav"
+            local mp3_file="${base}.mp3"
+            local txt_file="${base}.txt"
+            local summary_file="${base}_summary.md"
+            local outline_file="${base}.outline_url"
+
+            # Determine title for log messages
+            local title="$base_name"
+            local metadata_file="${base}_metadata.json"
+            if [ -f "$metadata_file" ]; then
+                local meta_title
+                meta_title=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$metadata_file'))
+    print(d.get('title',''))
+except Exception:
+    pass
+" 2>/dev/null)
+                [ -n "$meta_title" ] && title="$meta_title"
+            fi
+
+            # Case 1: has audio but no summary → needs processing
+            if [ ! -f "$summary_file" ] && ( [ -f "$wav_file" ] || [ -f "$mp3_file" ] ); then
+                local audio_file=""
+                [ -f "$wav_file" ] && audio_file="$wav_file"
+                [ -f "$mp3_file" ] && [ -z "$audio_file" ] && audio_file="$mp3_file"
+
+                log_info "[$title] Needs processing: $audio_file"
+                pending=$((pending + 1))
+
+                if [ "$dry_run" = true ]; then
+                    continue
+                fi
+
+                "$0" process "$audio_file" "${process_args[@]}"
+                local exit_code=$?
+                if [ $exit_code -ne 0 ]; then
+                    log_warn "[$title] Processing failed (exit $exit_code)"
+                    failed=$((failed + 1))
+                    continue
+                fi
+
+                # Re-check summary was produced
+                if [ ! -f "$summary_file" ]; then
+                    log_warn "[$title] Processing finished but no summary found"
+                    failed=$((failed + 1))
+                    continue
+                fi
+            fi
+
+            # Case 2: has summary but no outline_url → needs upload
+            if [ -f "$summary_file" ] && [ ! -f "$outline_file" ] && [ "$do_upload" = true ]; then
+                log_info "[$title] Uploading to Outline..."
+
+                if [ "$dry_run" = true ]; then
+                    continue
+                fi
+
+                if ! command -v hushnote-to-outline &>/dev/null; then
+                    log_warn "hushnote-to-outline not found on PATH, skipping upload"
+                    skipped=$((skipped + 1))
+                    continue
+                fi
+
+                local url
+                url=$(hushnote-to-outline "$summary_file" 2>/dev/null)
+                if [ $? -eq 0 ] && [ -n "$url" ]; then
+                    log_success "[$title] Uploaded: $url"
+                    uploaded=$((uploaded + 1))
+                else
+                    log_warn "[$title] Upload failed"
+                    failed=$((failed + 1))
+                fi
+            fi
+        done
+    done
+
+    echo ""
+    if [ "$dry_run" = true ]; then
+        log_info "Dry run — $pending meeting(s) would be processed"
+    else
+        log_success "Catchup complete — processed: $pending, uploaded: $uploaded, skipped: $skipped, failed: $failed"
+    fi
+}
+
 status_recordings() {
     if [ ! -d "$OUTPUT_DIR" ] || [ -z "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]; then
         log_warn "No recordings found in $OUTPUT_DIR"
@@ -1330,6 +1457,9 @@ main() {
             local keep_wav=false
             local clean_all=false
             local process_timeout="$PROCESS_TIMEOUT"
+            local enable_trim=true
+            local keep_untrimmed=false
+            local keep_trimmed=true
 
             while [[ $# -gt 0 ]]; do
                 case $1 in
@@ -1359,6 +1489,18 @@ main() {
                         ;;
                     --keep-wav)
                         keep_wav=true
+                        shift
+                        ;;
+                    --no-trim)
+                        enable_trim=false
+                        shift
+                        ;;
+                    --keep-untrimmed)
+                        keep_untrimmed=true
+                        shift
+                        ;;
+                    --keep-trimmed)
+                        keep_trimmed=true
                         shift
                         ;;
                     --clean)
@@ -1512,11 +1654,44 @@ main() {
                 log_info "Processing recording: $audio_file"
                 echo ""
 
+                local mp3_file=""
+                local transcribe_source="$audio_file"
+
+                # Step 1: Compress WAV → MP3, delete WAV
+                if [ "$clean_all" = true ]; then
+                    : # skip compression, delete everything at end
+                elif [ "$enable_compression" = true ]; then
+                    log_info "Compressing audio to MP3..."
+                    if [ "$keep_wav" = true ]; then
+                        mp3_file=$(compress_audio "$audio_file")
+                    else
+                        mp3_file=$(compress_audio "$audio_file" --delete-wav)
+                    fi
+                    if [ -n "$mp3_file" ] && [ -f "$mp3_file" ]; then
+                        transcribe_source="$mp3_file"
+                    fi
+                    echo ""
+                fi
+
+                # Step 2: Trim silent tail
+                local trimmed_file=""
+                if [ "$enable_trim" = true ] && [ -f "$transcribe_source" ]; then
+                    log_info "Trimming silent tail..."
+                    trimmed_file=$(trim_audio "$transcribe_source")
+                    if [ -n "$trimmed_file" ] && [ -f "$trimmed_file" ]; then
+                        transcribe_source="$trimmed_file"
+                    fi
+                    echo ""
+                fi
+
+                # Step 3: Transcribe
                 local process_transcribe_args=(-m "$whisper_model")
                 [ -n "$whisper_language" ] && process_transcribe_args+=(-l "$whisper_language")
-                local transcription_file=$(transcribe_meeting "$audio_file" "${process_transcribe_args[@]}")
+                local transcription_file
+                transcription_file=$(transcribe_meeting "$transcribe_source" "${process_transcribe_args[@]}")
 
                 if [ -f "$transcription_file" ]; then
+                    # Step 4: Summarize
                     local summary_file
                     if [ -n "$ollama_model" ]; then
                         summary_file=$(summarize_meeting "$transcription_file" -o "$ollama_model")
@@ -1526,26 +1701,21 @@ main() {
 
                     echo ""
 
-                    # Compress audio and cleanup
+                    # Cleanup audio
                     if [ "$clean_all" = true ]; then
-                        echo ""
                         log_info "Removing all audio files..."
-                        [ -f "$audio_file" ] && rm "$audio_file" && log_success "Deleted: $audio_file"
-                        local mp3_file="${audio_file%.wav}.mp3"
-                        [ -f "$mp3_file" ] && rm "$mp3_file" && log_success "Deleted: $mp3_file"
+                        [ -f "$audio_file" ]    && rm "$audio_file"    && log_success "Deleted: $audio_file"
+                        [ -n "$mp3_file" ] && [ -f "$mp3_file" ]       && rm "$mp3_file" && log_success "Deleted: $mp3_file"
+                        [ -n "$trimmed_file" ] && [ -f "$trimmed_file" ] && rm "$trimmed_file" && log_success "Deleted: $trimmed_file"
                         audio_file="(deleted)"
-                    elif [ "$enable_compression" = true ]; then
-                        echo ""
-                        log_info "Compressing audio to MP3..."
-                        local mp3_file
-                        if [ "$keep_wav" = true ]; then
-                            mp3_file=$(compress_audio "$audio_file")
-                        else
-                            mp3_file=$(compress_audio "$audio_file" --delete-wav)
+                    else
+                        if [ -n "$trimmed_file" ] && [ -f "$trimmed_file" ] && [ -n "$mp3_file" ] && [ -f "$mp3_file" ]; then
+                            if [ "$keep_untrimmed" = false ]; then
+                                rm "$mp3_file" && log_info "Deleted untrimmed: $mp3_file"
+                            fi
                         fi
-
-                        if [ -n "$mp3_file" ] && [ -f "$mp3_file" ]; then
-                            audio_file="$mp3_file"
+                        if [ -n "$trimmed_file" ] && [ -f "$trimmed_file" ] && [ "$keep_trimmed" = false ]; then
+                            rm "$trimmed_file" && log_info "Deleted trimmed audio: $trimmed_file"
                         fi
                     fi
 
@@ -1553,9 +1723,10 @@ main() {
                     log_success "Processing complete!"
                     echo ""
                     echo "Files generated:"
-                    echo "  Audio:          $audio_file"
-                    echo "  Transcription:  $transcription_file"
-                    echo "  Summary:        $summary_file"
+                    [ -n "$trimmed_file" ] && [ -f "$trimmed_file" ] && echo "  Audio (trimmed):  $trimmed_file"
+                    [ -n "$mp3_file" ]     && [ -f "$mp3_file" ]     && echo "  Audio (full):     $mp3_file"
+                    echo "  Transcription:    $transcription_file"
+                    echo "  Summary:          $summary_file"
                 fi
             fi
             ) &
@@ -1636,6 +1807,9 @@ main() {
             ;;
         status)
             status_recordings
+            ;;
+        catchup)
+            catchup_recordings "$@"
             ;;
         -h|--help)
             print_usage
