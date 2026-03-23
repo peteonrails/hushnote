@@ -49,6 +49,7 @@ Commands:
     process FILE        Process existing recording (transcribe + diarize + summarize)
     process-last        Process most recent recording (transcribe + diarize + summarize)
     list               List all recordings
+    status             Show status of all recordings (what needs processing)
 
 Options:
     -d, --duration SEC  Recording duration in seconds (default: manual stop with Ctrl+C)
@@ -879,6 +880,124 @@ list_recordings() {
     fi
 }
 
+status_recordings() {
+    if [ ! -d "$OUTPUT_DIR" ] || [ -z "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]; then
+        log_warn "No recordings found in $OUTPUT_DIR"
+        exit 0
+    fi
+
+    local col_date=12
+    local col_title=32
+    local col_status=28
+    local col_dur=6
+
+    # Header
+    printf "%-${col_date}s  %-${col_title}s  %-${col_status}s  %s\n" \
+        "DATE" "TITLE" "STATUS" "DUR"
+    printf "%-${col_date}s  %-${col_title}s  %-${col_status}s  %s\n" \
+        "------------" "--------------------------------" "----------------------------" "------"
+
+    local total=0 pending=0 partial=0 done_local=0 done_uploaded=0
+
+    for date_dir in "$OUTPUT_DIR"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]; do
+        [ -d "$date_dir" ] || continue
+
+        local date_name
+        date_name=$(basename "$date_dir")
+        local formatted_date="${date_name:0:4}-${date_name:4:2}-${date_name:6:2}"
+
+        for meeting_dir in "$date_dir"/meeting_*; do
+            [ -d "$meeting_dir" ] || continue
+
+            local base_name
+            base_name=$(basename "$meeting_dir")
+            local base="${meeting_dir}/${base_name}"
+
+            # Locate audio (wav preferred, then mp3)
+            local wav_file="${base}.wav"
+            local mp3_file="${base}.mp3"
+            local txt_file="${base}.txt"
+            local summary_file="${base}_summary.md"
+            local metadata_file="${base}_metadata.json"
+            local outline_file="${base}.outline_url"
+
+            local has_wav=false has_mp3=false has_txt=false has_summary=false has_outline=false
+            [ -f "$wav_file" ]     && has_wav=true
+            [ -f "$mp3_file" ]     && has_mp3=true
+            [ -f "$txt_file" ]     && has_txt=true
+            [ -f "$summary_file" ] && has_summary=true
+            [ -f "$outline_file" ] && has_outline=true
+
+            # Skip dirs with no recognisable audio at all and no txt either
+            if ! $has_wav && ! $has_mp3 && ! $has_txt; then
+                continue
+            fi
+
+            total=$((total + 1))
+
+            # Determine status
+            local status_text status_color
+            if $has_summary && $has_outline; then
+                status_text="done + uploaded"
+                status_color="$GREEN"
+                done_uploaded=$((done_uploaded + 1))
+            elif $has_summary; then
+                status_text="done, not uploaded"
+                status_color="$GREEN"
+                done_local=$((done_local + 1))
+            elif $has_txt; then
+                status_text="transcribed, no summary"
+                status_color="$YELLOW"
+                partial=$((partial + 1))
+            elif $has_wav || $has_mp3; then
+                status_text="recorded, not processed"
+                status_color="$YELLOW"
+                pending=$((pending + 1))
+            else
+                status_text="unknown"
+                status_color="$NC"
+            fi
+
+            # Title from metadata
+            local title=""
+            if [ -f "$metadata_file" ]; then
+                title=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$metadata_file'))
+    print(d.get('title',''))
+except Exception:
+    pass
+" 2>/dev/null)
+            fi
+            [ -z "$title" ] && title="$base_name"
+
+            # Duration from wav/mp3 via ffprobe if available
+            local duration=""
+            local audio_for_dur=""
+            $has_wav && audio_for_dur="$wav_file"
+            $has_mp3 && audio_for_dur="$mp3_file"
+            if [ -n "$audio_for_dur" ] && command -v ffprobe &>/dev/null; then
+                local secs
+                secs=$(ffprobe -v error -show_entries format=duration \
+                    -of default=noprint_wrappers=1:nokey=1 "$audio_for_dur" 2>/dev/null | cut -d. -f1)
+                if [ -n "$secs" ] && [ "$secs" -gt 0 ] 2>/dev/null; then
+                    duration=$(printf "%dm" "$((secs / 60))")
+                fi
+            fi
+
+            # Truncate title for display
+            local display_title="${title:0:$col_title}"
+
+            printf "%-${col_date}s  %-${col_title}s  ${status_color}%-${col_status}s${NC}  %s\n" \
+                "$formatted_date" "$display_title" "$status_text" "${duration:--}"
+        done
+    done
+
+    echo ""
+    echo "Total: $total  |  Pending: $pending  |  Partial: $partial  |  Done (local): $done_local  |  Done (uploaded): $done_uploaded"
+}
+
 # Main command dispatcher
 main() {
     if [ $# -eq 0 ]; then
@@ -1298,6 +1417,9 @@ main() {
             ;;
         list)
             list_recordings
+            ;;
+        status)
+            status_recordings
             ;;
         -h|--help)
             print_usage
