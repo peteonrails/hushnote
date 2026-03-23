@@ -74,34 +74,50 @@ def transcribe_audio(
     if device == "auto":
         device = "cuda"
 
-    compute_type = "float16" if device == "cuda" else "int8"
+    # int8_float16 uses ~half the VRAM of float16 with negligible quality loss.
+    # Fall back to int8 on CPU if CUDA is not available.
+    compute_type = "int8_float16" if device == "cuda" else "int8"
 
-    print(f"Loading Whisper model: {model_size} on {device}", file=sys.stderr)
+    def _load_model(dev, ctype):
+        print(f"Loading Whisper model: {model_size} on {dev} ({ctype})", file=sys.stderr)
+        return WhisperModel(model_size, device=dev, compute_type=ctype)
+
+    def _run_transcription(mdl):
+        kwargs = {"beam_size": 5}
+        if language:
+            kwargs["language"] = language
+        segments, info = mdl.transcribe(str(audio_file), **kwargs)
+        print(f"Detected language: {info.language}", file=sys.stderr)
+        result_segments = []
+        for segment in segments:
+            result_segments.append({
+                "start": segment.start,
+                "end": segment.end,
+                "text": segment.text.strip()
+            })
+        return info, result_segments
+
     try:
-        model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        model = _load_model(device, compute_type)
     except RuntimeError as e:
         if "out of memory" in str(e).lower() or "CUDA" in str(e):
-            print("GPU unavailable, falling back to CPU", file=sys.stderr)
-            model = WhisperModel(model_size, device="cpu", compute_type="int8")
+            print("GPU OOM during model load, falling back to CPU", file=sys.stderr)
+            device = "cpu"
+            model = _load_model("cpu", "int8")
         else:
             raise
 
     print(f"Transcribing: {audio_file}", file=sys.stderr)
-    kwargs = {"beam_size": 5}
-    if language:
-        kwargs["language"] = language
-
-    segments, info = model.transcribe(str(audio_file), **kwargs)
-    print(f"Detected language: {info.language}", file=sys.stderr)
-
-    # Reformat segments to match our expected format
-    all_segments = []
-    for segment in segments:
-        all_segments.append({
-            "start": segment.start,
-            "end": segment.end,
-            "text": segment.text.strip()
-        })
+    try:
+        info, all_segments = _run_transcription(model)
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower() or "CUDA" in str(e):
+            print("GPU OOM during transcription, falling back to CPU", file=sys.stderr)
+            del model
+            model = _load_model("cpu", "int8")
+            info, all_segments = _run_transcription(model)
+        else:
+            raise
 
     return {
         "language": info.language,

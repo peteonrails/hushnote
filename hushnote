@@ -21,6 +21,7 @@ WHISPER_MODEL="${WHISPER_MODEL:-base}"
 WHISPER_LANGUAGE="${WHISPER_LANGUAGE:-}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.1:8b}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
+PROCESS_TIMEOUT="${PROCESS_TIMEOUT:-7200}"  # Max seconds for process/process-last (default: 2h)
 DEBUG="${DEBUG:-false}"
 PYTHON="${SCRIPT_DIR}/venv/bin/python3"
 
@@ -69,6 +70,7 @@ Environment Variables:
     OLLAMA_MODEL        Default Ollama model (default: llama3.1:8b)
     OLLAMA_URL          Ollama API URL (default: http://localhost:11434)
     HF_TOKEN            HuggingFace API token (for speaker diarization)
+    PROCESS_TIMEOUT     Max seconds for process/process-last before auto-kill (default: 7200)
     DEBUG               Enable debug output (set to 'true' to enable)
 
 Examples:
@@ -960,10 +962,11 @@ main() {
                 echo "Process an existing recording (transcribe + optional diarize + summarize)"
                 echo ""
                 echo "Options:"
-                echo "  -m, --model MODEL   Whisper model (tiny|base|small|medium|large-v3)"
-                echo "  -o, --ollama MODEL  Ollama model for summarization"
-                echo "  -s, --speakers NUM  Number of speakers (requires --diarize)"
-                echo "  --diarize           Enable speaker diarization"
+                echo "  -m, --model MODEL     Whisper model (tiny|base|small|medium|large-v3)"
+                echo "  -o, --ollama MODEL    Ollama model for summarization"
+                echo "  -s, --speakers NUM    Number of speakers (requires --diarize)"
+                echo "  --diarize             Enable speaker diarization"
+                echo "  --timeout SECS        Kill processing after SECS seconds (default: ${PROCESS_TIMEOUT})"
                 echo ""
                 echo "Examples:"
                 echo "  # Simple processing (transcribe + summarize)"
@@ -991,6 +994,7 @@ main() {
             local enable_compression=true
             local keep_wav=false
             local clean_all=false
+            local process_timeout="$PROCESS_TIMEOUT"
 
             while [[ $# -gt 0 ]]; do
                 case $1 in
@@ -1026,12 +1030,28 @@ main() {
                         clean_all=true
                         shift
                         ;;
+                    --timeout)
+                        process_timeout="$2"
+                        shift 2
+                        ;;
                     *)
                         shift
                         ;;
                 esac
             done
 
+            local timeout_human
+            if [ "$process_timeout" -ge 3600 ] 2>/dev/null; then
+                timeout_human="$((process_timeout / 3600))h$(( (process_timeout % 3600) / 60 ))m"
+            else
+                timeout_human="${process_timeout}s"
+            fi
+            log_info "Timeout: ${timeout_human} (override with --timeout SECS or PROCESS_TIMEOUT env var)"
+
+            # Run the entire processing block under a timeout.
+            # The subshell runs as a background job; a watchdog kills the process group
+            # with SIGTERM after process_timeout seconds, then SIGKILL after 30 more.
+            (
             if [ "$enable_diarization" = true ]; then
                 log_info "Processing recording with diarization: $audio_file"
                 echo ""
@@ -1202,6 +1222,37 @@ main() {
                     echo "  Transcription:  $transcription_file"
                     echo "  Summary:        $summary_file"
                 fi
+            fi
+            ) &
+            local _proc_pid=$!
+
+            # Watchdog: sleep in background, then kill the processing subshell
+            (
+                sleep "$process_timeout"
+                if kill -0 "$_proc_pid" 2>/dev/null; then
+                    echo "" >&2
+                    echo -e "${RED}[ERROR]${NC} Processing timed out after ${timeout_human}. Stopping..." >&2
+                    kill -TERM "$_proc_pid" 2>/dev/null
+                    sleep 30
+                    kill -KILL "$_proc_pid" 2>/dev/null
+                fi
+            ) &
+            local _watchdog_pid=$!
+
+            wait "$_proc_pid"
+            local _exit=$?
+
+            # Cancel the watchdog if processing finished in time
+            kill "$_watchdog_pid" 2>/dev/null
+            wait "$_watchdog_pid" 2>/dev/null
+
+            if [ $_exit -eq 143 ] || [ $_exit -eq 137 ]; then
+                # 143 = SIGTERM, 137 = SIGKILL
+                log_error "Processing was stopped after ${timeout_human} timeout."
+                log_error "Any files written before the timeout are still on disk."
+                exit 1
+            elif [ $_exit -ne 0 ]; then
+                exit $_exit
             fi
             ;;
         process-last)
