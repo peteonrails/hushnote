@@ -66,24 +66,13 @@ yay -S ffmpeg pipewire-pulse python
 
 ## Configuration
 
-Create a `.hushnoterc` file in the repo directory to set your defaults:
+Copy `.hushnoterc.example` to `.hushnoterc` and edit to your needs:
 
 ```bash
-RECORDINGS_DIR="${HOME}/meeting-notes"
-WHISPER_MODEL=large-v3
-WHISPER_LANGUAGE=nl          # omit for auto-detect
-OLLAMA_MODEL=llama3.1:8b
-OLLAMA_URL=http://localhost:11434
-
-# Audio backend: ffmpeg (default) or pw-record (better for BT headsets)
-RECORD_BACKEND=pw-record
-
-# Audio source: mic, sink (system audio), or both
-AUDIO_SOURCE_TYPE=both
-
-# Free VRAM before transcription by unloading Ollama models
-UNLOAD_OLLAMA=1
+cp .hushnoterc.example .hushnoterc
 ```
+
+`.hushnoterc` is sourced at startup and ignored by git (personal paths and secrets stay local). The example file documents every available option with defaults and comments.
 
 ### Whisper Models
 

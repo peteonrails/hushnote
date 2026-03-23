@@ -1,28 +1,67 @@
-# HushNote Configuration File Example
-# Copy this file to .hushnoterc and customize for your setup
-# cp .hushnoterc.example .hushnoterc
+# HushNote configuration
+# Copy this file to .hushnoterc and edit to your needs.
+# This file is sourced as bash, so standard shell syntax applies.
 
-# Whisper transcription model
-# Options: tiny, base, small, medium, large-v3, turbo
-# Recommended: medium (good balance of quality and GPU memory usage)
-WHISPER_MODEL=base
+# Directory where recordings are stored
+# Default: ./recordings (relative to the hushnote directory)
+#RECORDINGS_DIR="${HOME}/meeting-notes"
 
-# Ollama summarization model
-# Examples: llama3.1:8b, gemma2:9b, mistral:7b, qwen2.5:7b
+# Whisper model size: tiny, base, small, medium, large-v3
+# Larger models are more accurate but slower and use more memory.
+# Default: base
+#WHISPER_MODEL=base
+
+# Language code for transcription, e.g. nl, en, de, fr
+# Omit or leave empty to auto-detect.
+#WHISPER_LANGUAGE=
+
+# Ollama model for summarization
 # Default: llama3.1:8b
-OLLAMA_MODEL=llama3.1:8b
+#OLLAMA_MODEL=llama3.1:8b
 
-# Ollama server URL
-# Change if running Ollama on a different host/port
-OLLAMA_URL=http://localhost:11434
+# Ollama API URL
+# Default: http://localhost:11434
+#OLLAMA_URL=http://localhost:11434
 
-# Recordings directory
-# Uncomment to change from default ./recordings
-# RECORDINGS_DIR=/path/to/recordings
+# Audio recording backend: ffmpeg or pw-record
+# Use pw-record for Bluetooth headsets (HSP/HFP mode via PipeWire).
+# Default: ffmpeg
+#RECORD_BACKEND=ffmpeg
 
-# Debug mode (set to "true" to enable verbose logging)
-# DEBUG=false
+# Audio source type: mic, sink, or both
+#   mic   — microphone input only
+#   sink  — system audio (sink monitor) only, captures what plays through speakers
+#   both  — mix mic and sink monitor (useful for recording calls)
+# Default: mic
+#AUDIO_SOURCE_TYPE=mic
 
-# HuggingFace token for speaker diarization
-# Get yours at: https://huggingface.co/settings/tokens
-# HF_TOKEN=your_token_here
+# Unload Ollama models before transcription to free VRAM for Whisper.
+# Set to 1 if you run into out-of-memory errors during transcription.
+# Default: unset (disabled)
+#UNLOAD_OLLAMA=1
+
+# Maximum seconds for the process/process-last commands before timing out.
+# Default: 7200 (2 hours)
+#PROCESS_TIMEOUT=7200
+
+# Silence detection threshold in dB for tail trimming.
+# More negative = stricter (only very quiet audio counts as silence).
+# Default: -35
+#TRIM_NOISE_DB=-35
+
+# Minimum continuous silence duration in seconds to consider a tail silent.
+# Default: 60
+#TRIM_MIN_SILENCE=60
+
+# Post-summary hook: path to an executable that runs after every summary is created.
+# Receives the summary file path as $1.
+# On success, hushnote writes a .hook_done marker so the hook is not re-run.
+# Use this to integrate with Outline, Notion, a webhook, or any other destination.
+#
+# Example using the bundled hushnote-to-outline script:
+#POST_SUMMARY_HOOK="${HOME}/.local/bin/hushnote-to-outline"
+
+# HuggingFace API token — required for speaker diarization (pyannote models).
+# Create a token at https://huggingface.co/settings/tokens
+# Accept model conditions at https://huggingface.co/pyannote/speaker-diarization-3.1
+#HF_TOKEN=hf_...
