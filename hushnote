@@ -22,6 +22,8 @@ WHISPER_LANGUAGE="${WHISPER_LANGUAGE:-}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.1:8b}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 PROCESS_TIMEOUT="${PROCESS_TIMEOUT:-7200}"  # Max seconds for process/process-last (default: 2h)
+TRIM_NOISE_DB="${TRIM_NOISE_DB:--35}"       # dB threshold for silence detection (default: -35)
+TRIM_MIN_SILENCE="${TRIM_MIN_SILENCE:-60}"  # Minimum silence duration in seconds (default: 60)
 DEBUG="${DEBUG:-false}"
 PYTHON="${SCRIPT_DIR}/venv/bin/python3"
 
@@ -43,6 +45,7 @@ Commands:
     diarize FILE        Identify speakers in an audio file
     label FILE          Label speakers with their names (interactive)
     apply-labels FILE   Apply speaker labels to create final transcript
+    trim FILE           Detect and remove silent tail from an audio file
     compress FILE       Compress WAV to MP3 and delete WAV
     clean FILE          Delete ALL audio files (WAV and MP3)
     full               Complete workflow: record, transcribe, and summarize
@@ -62,6 +65,9 @@ Options:
     --diarize           Enable speaker diarization in full workflow
     --no-compress       Skip MP3 compression (keep WAV only)
     --keep-wav          Keep WAV file after compression (default: delete WAV)
+    --no-trim           Skip silent tail trimming
+    --keep-untrimmed    Keep full MP3 alongside trimmed version (default: delete)
+    --keep-trimmed      Keep trimmed MP3 after transcription (default: keep)
     --clean             Delete ALL audio files (WAV and MP3), keep only text
     -h, --help          Show this help message
 
@@ -72,6 +78,8 @@ Environment Variables:
     OLLAMA_URL          Ollama API URL (default: http://localhost:11434)
     HF_TOKEN            HuggingFace API token (for speaker diarization)
     PROCESS_TIMEOUT     Max seconds for process/process-last before auto-kill (default: 7200)
+    TRIM_NOISE_DB       Silence threshold in dB for tail trimming (default: -35)
+    TRIM_MIN_SILENCE    Minimum silence duration in seconds to consider a tail (default: 60)
     DEBUG               Enable debug output (set to 'true' to enable)
 
 Examples:
@@ -323,6 +331,9 @@ full_workflow() {
     local keep_wav=false
     local clean_all=false
     local title=""
+    local enable_trim=true
+    local keep_untrimmed=false
+    local keep_trimmed=true
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -364,6 +375,18 @@ full_workflow() {
                 ;;
             --keep-wav)
                 keep_wav=true
+                shift
+                ;;
+            --no-trim)
+                enable_trim=false
+                shift
+                ;;
+            --keep-untrimmed)
+                keep_untrimmed=true
+                shift
+                ;;
+            --keep-trimmed)
+                keep_trimmed=true
                 shift
                 ;;
             --clean)
@@ -559,15 +582,44 @@ full_workflow() {
         echo "  Transcription:  $transcription_file"
         echo "  Summary:        $summary_file"
     else
-        # Standard workflow without diarization: 3 steps
+        # Standard workflow without diarization
 
-        # Step 2: Transcribe
-        log_info "Step 2/3: Transcribing audio..."
+        # Step 2: Compress WAV → MP3 and delete WAV
+        local mp3_file=""
+        local transcribe_source="$audio_file"
+        if [ "$clean_all" = true ]; then
+            log_info "Step 2/5: Skipping compression (--clean mode, audio will be deleted)"
+        elif [ "$enable_compression" = true ]; then
+            log_info "Step 2/5: Compressing audio to MP3..."
+            if [ "$keep_wav" = true ]; then
+                mp3_file=$(compress_audio "$audio_file")
+            else
+                mp3_file=$(compress_audio "$audio_file" --delete-wav)
+            fi
+            if [ -n "$mp3_file" ] && [ -f "$mp3_file" ]; then
+                transcribe_source="$mp3_file"
+            fi
+            echo ""
+        fi
+
+        # Step 3: Trim silent tail
+        local trimmed_file=""
+        if [ "$enable_trim" = true ] && [ -f "$transcribe_source" ]; then
+            log_info "Step 3/5: Trimming silent tail..."
+            trimmed_file=$(trim_audio "$transcribe_source")
+            if [ -n "$trimmed_file" ] && [ -f "$trimmed_file" ]; then
+                transcribe_source="$trimmed_file"
+            fi
+            echo ""
+        fi
+
+        # Step 4: Transcribe
+        log_info "Step 4/5: Transcribing audio..."
         local transcription_file
         local transcribe_args=()
         [ -n "$whisper_model" ] && transcribe_args+=(-m "$whisper_model")
         [ -n "$whisper_language" ] && transcribe_args+=(-l "$whisper_language")
-        transcription_file=$(transcribe_meeting "$audio_file" "${transcribe_args[@]}")
+        transcription_file=$(transcribe_meeting "$transcribe_source" "${transcribe_args[@]}")
 
         log_debug "Transcription file captured: [$transcription_file]"
 
@@ -578,8 +630,8 @@ full_workflow() {
 
         echo ""
 
-        # Step 3: Summarize
-        log_info "Step 3/3: Generating summary..."
+        # Step 5: Summarize
+        log_info "Step 5/5: Generating summary..."
         local summary_file
         if [ -n "$ollama_model" ]; then
             summary_file=$(summarize_meeting "$transcription_file" -o "$ollama_model")
@@ -594,37 +646,36 @@ full_workflow() {
 
         echo ""
 
-        # Step 4: Compress audio and cleanup
+        # Cleanup audio
         if [ "$clean_all" = true ]; then
-            log_info "Step 4/4: Removing all audio files..."
-            # Delete both WAV and MP3 if they exist
+            log_info "Removing all audio files..."
             [ -f "$audio_file" ] && rm "$audio_file" && log_success "Deleted: $audio_file"
-            local mp3_file="${audio_file%.wav}.mp3"
-            [ -f "$mp3_file" ] && rm "$mp3_file" && log_success "Deleted: $mp3_file"
+            [ -n "$mp3_file" ] && [ -f "$mp3_file" ] && rm "$mp3_file" && log_success "Deleted: $mp3_file"
+            [ -n "$trimmed_file" ] && [ -f "$trimmed_file" ] && rm "$trimmed_file" && log_success "Deleted: $trimmed_file"
             audio_file="(deleted)"
             echo ""
-        elif [ "$enable_compression" = true ]; then
-            log_info "Step 4/4: Compressing audio to MP3..."
-            local mp3_file
-            if [ "$keep_wav" = true ]; then
-                mp3_file=$(compress_audio "$audio_file")
-            else
-                # Default: delete WAV after compression
-                mp3_file=$(compress_audio "$audio_file" --delete-wav)
+        else
+            # Delete untrimmed MP3 unless --keep-untrimmed
+            if [ -n "$trimmed_file" ] && [ -f "$trimmed_file" ] && [ -n "$mp3_file" ] && [ -f "$mp3_file" ]; then
+                if [ "$keep_untrimmed" = false ]; then
+                    rm "$mp3_file" && log_info "Deleted untrimmed: $mp3_file (use --keep-untrimmed to keep)"
+                fi
             fi
-
-            if [ -n "$mp3_file" ] && [ -f "$mp3_file" ]; then
-                audio_file="$mp3_file"
+            # Delete trimmed MP3 if --keep-trimmed is false
+            if [ -n "$trimmed_file" ] && [ -f "$trimmed_file" ]; then
+                if [ "$keep_trimmed" = false ]; then
+                    rm "$trimmed_file" && log_info "Deleted trimmed audio: $trimmed_file"
+                fi
             fi
-            echo ""
         fi
 
         log_success "Complete workflow finished!"
         echo ""
         echo "Files generated:"
-        echo "  Audio:          $audio_file"
-        echo "  Transcription:  $transcription_file"
-        echo "  Summary:        $summary_file"
+        [ -n "$trimmed_file" ] && [ -f "$trimmed_file" ] && echo "  Audio (trimmed):    $trimmed_file"
+        [ -n "$mp3_file" ] && [ -f "$mp3_file" ] && echo "  Audio (full):       $mp3_file"
+        echo "  Transcription:      $transcription_file"
+        echo "  Summary:            $summary_file"
     fi
 }
 
@@ -778,6 +829,161 @@ compress_audio() {
         log_success "Compression complete: $mp3_file"
         echo "$mp3_file"
     fi
+}
+
+trim_audio() {
+    local audio_file="$1"
+    shift
+
+    local noise_threshold="${TRIM_NOISE_DB:--35}"
+    local min_silence="${TRIM_MIN_SILENCE:-60}"
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --noise)
+                noise_threshold="$2"
+                shift 2
+                ;;
+            --min-silence)
+                min_silence="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [ ! -f "$audio_file" ]; then
+        log_error "Audio file not found: $audio_file"
+        exit 1
+    fi
+
+    log_info "Scanning for silent tail: $audio_file (noise=${noise_threshold}dB, min-silence=${min_silence}s)"
+
+    local total_duration
+    total_duration=$(ffprobe -v error -show_entries format=duration \
+        -of default=noprint_wrappers=1:nokey=1 "$audio_file" 2>/dev/null)
+
+    if [ -z "$total_duration" ]; then
+        log_warn "Could not determine duration, skipping trim"
+        echo "$audio_file"
+        return 0
+    fi
+
+    local total_int
+    total_int=$(python3 -c "print(int(float('$total_duration')))")
+
+    # Window size for each probe: 5 minutes
+    local window=300
+
+    # Binary search for the last position that contains content.
+    # lo = last known position with content, hi = first known silent position.
+    # We probe the midpoint each iteration.
+    local lo=0
+    local hi=$total_int
+
+    # Confirm content exists at the very start before searching
+    local first_output
+    first_output=$(ffmpeg -ss 0 -t $window -i "$audio_file" \
+        -af "silencedetect=noise=${noise_threshold}dB:duration=${min_silence}" -f null - 2>&1)
+
+    local first_sil_at_start
+    first_sil_at_start=$(echo "$first_output" | grep -oP 'silence_start: \K[\d.]+' | head -1 || true)
+
+    local start_has_content=false
+    if [ -z "$first_sil_at_start" ]; then
+        start_has_content=true
+    elif python3 -c "exit(0 if float('$first_sil_at_start') > 5 else 1)" 2>/dev/null; then
+        start_has_content=true
+    fi
+
+    if [ "$start_has_content" = false ]; then
+        log_warn "No content found in first ${window}s — skipping trim"
+        echo "$audio_file"
+        return 0
+    fi
+
+    log_debug "Binary search: lo=${lo}s hi=${hi}s total=${total_int}s"
+
+    local iterations=0
+    while [ $((hi - lo)) -gt $window ] && [ $iterations -lt 12 ]; do
+        iterations=$((iterations + 1))
+        local mid=$(( (lo + hi) / 2 ))
+
+        local output
+        output=$(ffmpeg -ss "$mid" -t $window -i "$audio_file" \
+            -af "silencedetect=noise=${noise_threshold}dB:duration=${min_silence}" -f null - 2>&1)
+
+        # Window has content if: no silence detected at all, or first silence
+        # starts more than 5s in (meaning content preceded it).
+        # A silence_end alone does NOT mean content — it just means the silence
+        # block closed at the window boundary (entire window was silent).
+        local has_content=false
+        local first_sil
+        first_sil=$(echo "$output" | grep -oP 'silence_start: \K[\d.]+' | head -1 || true)
+
+        if [ -z "$first_sil" ]; then
+            has_content=true
+        elif python3 -c "exit(0 if float('$first_sil') > 5 else 1)" 2>/dev/null; then
+            has_content=true
+        fi
+
+        if [ "$has_content" = true ]; then
+            lo=$mid
+            log_debug "  mid=${mid}s → content found, lo=${lo}s"
+        else
+            hi=$mid
+            log_debug "  mid=${mid}s → silent, hi=${hi}s"
+        fi
+    done
+
+    # lo is the last window start known to have content.
+    # Scan that window precisely to find where content ends within it.
+    local final_output
+    final_output=$(ffmpeg -ss "$lo" -t $window -i "$audio_file" \
+        -af "silencedetect=noise=${noise_threshold}dB:duration=${min_silence}" -f null - 2>&1)
+
+    local last_silence_start_in_window
+    last_silence_start_in_window=$(echo "$final_output" | grep -oP 'silence_start: \K[\d.]+' | tail -1 || true)
+
+    local last_content_end
+    if [ -n "$last_silence_start_in_window" ]; then
+        # Add 2s buffer so we don't cut the last word
+        last_content_end=$(python3 -c "print(min(float('$total_duration'), $lo + float('$last_silence_start_in_window') + 2))")
+    else
+        # No silence in final window — content runs to end of it
+        last_content_end=$(python3 -c "print(min(float('$total_duration'), $lo + $window))")
+    fi
+
+    local total_min
+    total_min=$(python3 -c "print(round(float('$total_duration') / 60, 1))")
+    local trim_min
+    trim_min=$(python3 -c "print(round(float('$last_content_end') / 60, 1))")
+    local saved_min
+    saved_min=$(python3 -c "print(round((float('$total_duration') - float('$last_content_end')) / 60, 1))")
+
+    if python3 -c "exit(0 if float('$saved_min') < 1 else 1)" 2>/dev/null; then
+        log_info "Less than 1 min to trim — skipping (${total_min}min recording)"
+        echo "$audio_file"
+        return 0
+    fi
+
+    log_info "Trimming ${total_min}min → ${trim_min}min (saves ${saved_min}min)"
+
+    local ext="${audio_file##*.}"
+    local base="${audio_file%.*}"
+    local trimmed_file="${base}_trimmed.${ext}"
+
+    ffmpeg -i "$audio_file" -t "$last_content_end" -codec:a copy -y "$trimmed_file" 2>/dev/null
+
+    if [ ! -f "$trimmed_file" ]; then
+        log_error "Trim failed"
+        return 1
+    fi
+
+    log_success "Trimmed audio: $trimmed_file"
+    echo "$trimmed_file"
 }
 
 clean_audio() {
@@ -1053,6 +1259,16 @@ main() {
                 exit 1
             fi
             apply_speaker_labels "$@"
+            ;;
+        trim)
+            if [ $# -eq 0 ]; then
+                log_error "Missing audio file argument"
+                echo "Usage: $0 trim FILE [--noise -30] [--min-silence 60]"
+                echo ""
+                echo "Detect and remove silent tail from an audio file"
+                exit 1
+            fi
+            trim_audio "$@"
             ;;
         compress)
             if [ $# -eq 0 ]; then
