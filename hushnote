@@ -248,16 +248,18 @@ transcribe_meeting() {
     log_info "Using Whisper model: $model"
     [ -n "$language" ] && log_info "Language: $language"
 
-    local cmd="\"$PYTHON\" \"${SCRIPT_DIR}/transcribe.py\" \"$audio_file\" -m $model -f $format"
+    # Derive output path, stripping _trimmed suffix so transcripts are named
+    # after the meeting base rather than the trimmed audio file.
+    if [ -z "$output" ]; then
+        local base="${audio_file%.*}"
+        base="${base%_trimmed}"
+        output="${base}.${format}"
+    fi
+
+    local cmd="\"$PYTHON\" \"${SCRIPT_DIR}/transcribe.py\" \"$audio_file\" -m $model -f $format -o \"$output\""
     [ -n "$language" ] && cmd="$cmd -l $language"
-    [ -n "$output" ] && cmd="$cmd -o \"$output\""
 
     eval $cmd
-
-    # Determine output file
-    if [ -z "$output" ]; then
-        output="${audio_file%.*}.${format}"
-    fi
 
     if [ -f "$output" ]; then
         log_success "Transcription complete: $output"
@@ -304,16 +306,17 @@ summarize_meeting() {
     log_info "Summarizing transcription: $transcription_file"
     log_info "Using Ollama model: $model"
 
-    local cmd="\"$PYTHON\" \"${SCRIPT_DIR}/summarize.py\" \"$transcription_file\" -m $model -f $format"
-    [ -n "$output" ] && cmd="$cmd -o \"$output\""
-
-    eval $cmd
-
-    # Determine output file
+    # Derive output path, stripping _trimmed suffix so summaries are named
+    # after the meeting base rather than the trimmed file.
     if [ -z "$output" ]; then
         local base="${transcription_file%.*}"
+        base="${base%_trimmed}"
         output="${base}_summary.${format}"
     fi
+
+    local cmd="\"$PYTHON\" \"${SCRIPT_DIR}/summarize.py\" \"$transcription_file\" -m $model -f $format -o \"$output\""
+
+    eval $cmd
 
     if [ -f "$output" ]; then
         log_success "Summary complete: $output"
