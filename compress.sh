@@ -104,7 +104,7 @@ echo "Bitrate: $BITRATE" >&2
 original_size=$(du -h "$WAV_FILE" | cut -f1)
 
 # Convert to MP3
-ffmpeg -i "$WAV_FILE" -codec:a libmp3lame -b:a "$BITRATE" -y "$OUTPUT_FILE" 2>&1 | grep -v "^size=" || true
+ffmpeg -i "$WAV_FILE" -codec:a libmp3lame -b:a "$BITRATE" -y "$OUTPUT_FILE" 2>/dev/null || true
 
 if [ ! -f "$OUTPUT_FILE" ]; then
     echo "Error: Compression failed" >&2
