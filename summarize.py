@@ -31,7 +31,7 @@ SUMMARY_PROMPT = """You are an AI assistant that creates concise meeting summari
 Transcription:
 {transcription}
 
-Please format your response in markdown."""
+Use markdown headings and bullet points. Do not wrap your response in a code block."""
 
 ACTION_ITEMS_PROMPT = """Extract all action items and tasks from this meeting transcription. For each action item, identify:
 - The task/action
@@ -41,7 +41,7 @@ ACTION_ITEMS_PROMPT = """Extract all action items and tasks from this meeting tr
 Transcription:
 {transcription}
 
-Format as a markdown checklist with details."""
+Use a markdown checklist. Do not wrap your response in a code block."""
 
 
 def query_ollama(prompt: str, model: str = "llama3.1:8b", ollama_url: str = DEFAULT_OLLAMA_URL) -> str:
@@ -115,7 +115,7 @@ def summarize_meeting(
         ollama_url=ollama_url
     )
 
-    result = {"summary": summary}
+    result = {"summary": _strip_code_fence(summary)}
 
     # Extract action items if requested
     if include_action_items:
@@ -125,9 +125,19 @@ def summarize_meeting(
             model=model,
             ollama_url=ollama_url
         )
-        result["action_items"] = action_items
+        result["action_items"] = _strip_code_fence(action_items)
 
     return result
+
+
+def _strip_code_fence(text: str) -> str:
+    """Strip wrapping code fences that models sometimes add around markdown output."""
+    import re
+    # Match optional language tag: ```markdown or ```md or just ```
+    text = text.strip()
+    text = re.sub(r"^```[a-z]*\n", "", text)
+    text = re.sub(r"\n```$", "", text)
+    return text.strip()
 
 
 def save_summary(result: dict, output_file: str, format: str):
