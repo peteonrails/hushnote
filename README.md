@@ -202,7 +202,7 @@ ollama list
 
 ## License
 
-MIT — see LICENSE file.
+MIT. See LICENSE file.
 
 ## Credits
 
