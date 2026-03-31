@@ -146,10 +146,15 @@ if [ -f "$OUTPUT_FILE" ]; then
     echo "" >&2
     echo "Recording saved to: $OUTPUT_FILE" >&2
 
-    # Prompt for title if not provided
+    # Prompt for title if not provided and a terminal is available
     if [ -z "$TITLE" ]; then
-        echo "" >&2
-        read -p "Meeting title (optional): " TITLE </dev/tty
+        if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+            echo "" >&2
+            read -p "Meeting title (optional): " TITLE </dev/tty
+        else
+            echo "" >&2
+            echo "No terminal available, skipping title prompt." >&2
+        fi
     fi
 
     # Create metadata file
