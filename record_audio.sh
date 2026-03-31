@@ -148,12 +148,10 @@ if [ -f "$OUTPUT_FILE" ]; then
 
     # Prompt for title if not provided and a terminal is available
     if [ -z "$TITLE" ]; then
-        if [ -r /dev/tty ] && [ -w /dev/tty ]; then
-            echo "" >&2
-            read -p "Meeting title (optional): " TITLE </dev/tty
+        if read -p "Meeting title (optional): " TITLE </dev/tty 2>/dev/null; then
+            : # title captured
         else
-            echo "" >&2
-            echo "No terminal available, skipping title prompt." >&2
+            TITLE=""
         fi
     fi
 
