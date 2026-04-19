@@ -30,5 +30,5 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/larsderidder/hushnote"
-Issues = "https://github.com/larsderidder/hushnote/issues"
+Homepage = "https://github.com/peteonrails/hushnote"
+Issues = "https://github.com/peteonrails/hushnote/issues"

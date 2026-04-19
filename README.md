@@ -4,8 +4,6 @@
 
 HushNote is a local-only, offline-capable voice transcription and meeting summarization tool. All processing happens on your machine using local AI models — no cloud services, no data sharing, complete privacy.
 
-> **This is the actively maintained fork.** The [original repository](https://github.com/peteonrails/hushnote) is no longer active. This fork adds faster-whisper, PipeWire support, configurable audio sources, silent tail trimming, status/catchup commands, post-summary hooks, and more.
-
 ## Features
 
 - **🎙️ Audio Recording**: Capture system audio, microphone, or both simultaneously via PulseAudio/PipeWire
@@ -32,7 +30,7 @@ HushNote is a local-only, offline-capable voice transcription and meeting summar
 ### Quick Install
 
 ```bash
-git clone https://github.com/larsderidder/hushnote.git
+git clone https://github.com/peteonrails/hushnote.git
 cd hushnote
 
 # Create a virtual environment
