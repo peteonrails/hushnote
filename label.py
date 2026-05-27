@@ -196,6 +196,23 @@ def interactive_label_speakers(data: dict) -> dict:
     return data
 
 
+def auto_label_speakers(data: dict) -> dict:
+    """Label detected speakers as Speaker 1, Speaker 2, and so on."""
+    speakers = sorted(set(seg["speaker_id"] for seg in data["segments"]))
+    labeled_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    data["labels"] = {
+        speaker_id: {
+            "name": f"Speaker {index}",
+            "email": None,
+            "role": None,
+            "source": "auto",
+            "labeled_at": labeled_at,
+        }
+        for index, speaker_id in enumerate(speakers, start=1)
+    }
+    return data
+
+
 def save_labeled(data: dict, output_file: str):
     """Save labeled results to JSON file"""
     output_path = Path(output_file)
@@ -212,7 +229,7 @@ def main():
     parser.add_argument("-o", "--output",
                        help="Output file (default: input_file_labeled.json)")
     parser.add_argument("--non-interactive", action="store_true",
-                       help="Skip interactive prompts (for testing)")
+                       help="Automatically label speakers as Speaker 1, Speaker 2, and so on")
 
     args = parser.parse_args()
 
@@ -234,7 +251,8 @@ def main():
     # Label speakers
     try:
         if args.non_interactive:
-            print("Non-interactive mode: skipping speaker labeling", file=sys.stderr)
+            print("Non-interactive mode: auto-labeling speakers", file=sys.stderr)
+            data = auto_label_speakers(data)
         else:
             data = interactive_label_speakers(data)
 
