@@ -114,6 +114,13 @@ Options:
     --keep-untrimmed        Keep full MP3 alongside trimmed version (default: delete)
     --keep-trimmed          Keep trimmed MP3 after transcription (default: keep)
     --timeout SECS          Kill processing after SECS seconds (default: 7200)
+
+Catchup-only options:
+    --recent-days DAYS      Only scan meeting dirs changed in the last N days
+    --min-age SECS          Skip audio files newer than SECS
+    --lock-file PATH        Exit if another catchup owns this lock file
+    --skip-if-active        Exit if recording or processing already appears active
+    --active-pattern REGEX  Custom process regex for --skip-if-active
 ```
 
 ### Common workflows
@@ -128,6 +135,9 @@ Options:
 # Process any recordings that were interrupted or missed
 ./hushnote catchup
 
+# Safe unattended catchup for a systemd timer
+./hushnote catchup --recent-days 3 --min-age 300 --lock-file /tmp/hushnote-catchup.lock --skip-if-active
+
 # Process a recording you already have
 ./hushnote process recordings/meeting.wav
 
@@ -136,6 +146,17 @@ Options:
 ```
 
 See [DIARIZATION.md](DIARIZATION.md) for the full speaker diarization guide.
+
+### Recipe: unattended catchup
+
+For a timer or cron job, run catchup with the safety options enabled:
+
+```bash
+cd ~/workspace/hushnote
+./hushnote catchup --recent-days 3 --min-age 300 --lock-file /tmp/hushnote-catchup.lock --skip-if-active
+```
+
+This only checks recent meeting folders, skips recordings that are still fresh, avoids overlapping runs, and exits if HushNote is already recording or processing.
 
 ## Pipeline
 
