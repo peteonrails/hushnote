@@ -44,6 +44,11 @@
 # Default: 7200 (2 hours)
 #PROCESS_TIMEOUT=7200
 
+# Optional defaults for unattended catchup runs.
+#HUSHNOTE_CATCHUP_DAYS=3
+#HUSHNOTE_CATCHUP_MIN_AGE=300
+#HUSHNOTE_CATCHUP_LOCK=/tmp/hushnote-catchup.lock
+
 # Silence detection threshold in dB for tail trimming.
 # More negative = stricter (only very quiet audio counts as silence).
 # Default: -35

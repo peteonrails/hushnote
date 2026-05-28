@@ -83,6 +83,9 @@ Environment Variables:
     TRIM_NOISE_DB       Silence threshold in dB for tail trimming (default: -35)
     TRIM_MIN_SILENCE    Minimum silence duration in seconds to consider a tail (default: 60)
     POST_SUMMARY_HOOK   Executable to run after summary is created; receives summary path as \$1
+    HUSHNOTE_CATCHUP_DAYS      Only catch up meeting dirs changed in the last N days
+    HUSHNOTE_CATCHUP_MIN_AGE   Skip audio files newer than N seconds during catchup
+    HUSHNOTE_CATCHUP_LOCK      Lock file for unattended catchup runs
     DEBUG               Enable debug output (set to 'true' to enable)
 
 Examples:
@@ -100,6 +103,9 @@ Examples:
 
     # List all recordings
     $0 list
+
+    # Unattended catchup for recent stable recordings
+    $0 catchup --recent-days 3 --min-age 300 --lock-file /tmp/hushnote-catchup.lock --skip-if-active
 EOF
 }
 
@@ -1120,23 +1126,120 @@ run_post_summary_hook() {
     return 0
 }
 
+catchup_has_active_process() {
+    local active_pattern="$1"
+    local pid
+
+    while IFS= read -r pid; do
+        [ -n "$pid" ] || continue
+        [ "$pid" = "$$" ] && continue
+        [ "$pid" = "$BASHPID" ] && continue
+        return 0
+    done < <(pgrep -u "$USER" -f "$active_pattern" 2>/dev/null || true)
+
+    return 1
+}
+
 catchup_recordings() {
     local dry_run=false
+    local recent_days="${HUSHNOTE_CATCHUP_DAYS:-}"
+    local min_age_seconds="${HUSHNOTE_CATCHUP_MIN_AGE:-0}"
+    local lock_file="${HUSHNOTE_CATCHUP_LOCK:-}"
+    local skip_if_active=false
+    local active_pattern='record_audio\.sh|pw-record|/hushnote (full|process)|transcribe\.py|summarize\.py|diarize\.py'
     local process_args=()
 
     while [[ $# -gt 0 ]]; do
         case $1 in
+            -h|--help)
+                cat << EOF
+Usage: $0 catchup [OPTIONS] [PROCESS_OPTIONS]
+
+Process unfinished recordings and run the post-summary hook.
+
+Options:
+    --dry-run              Show what would be processed
+    --recent-days DAYS     Only scan meeting dirs changed in the last N days
+    --min-age SECS         Skip audio files newer than SECS
+    --lock-file PATH       Exit if another catchup owns this lock file
+    --skip-if-active       Exit if recording or processing already appears active
+    --active-pattern REGEX Custom process regex for --skip-if-active
+
+Other options are passed through to process.
+EOF
+                return 0
+                ;;
             --dry-run)
                 dry_run=true
                 shift
                 ;;
+            --recent-days)
+                if [ $# -lt 2 ]; then
+                    log_error "--recent-days requires a value"
+                    exit 1
+                fi
+                recent_days="$2"
+                shift 2
+                ;;
+            --min-age)
+                if [ $# -lt 2 ]; then
+                    log_error "--min-age requires a value"
+                    exit 1
+                fi
+                min_age_seconds="$2"
+                shift 2
+                ;;
+            --lock-file)
+                if [ $# -lt 2 ]; then
+                    log_error "--lock-file requires a value"
+                    exit 1
+                fi
+                lock_file="$2"
+                shift 2
+                ;;
+            --skip-if-active)
+                skip_if_active=true
+                shift
+                ;;
+            --active-pattern)
+                if [ $# -lt 2 ]; then
+                    log_error "--active-pattern requires a value"
+                    exit 1
+                fi
+                active_pattern="$2"
+                skip_if_active=true
+                shift 2
+                ;;
             *)
-                # Pass remaining args through to process (e.g. --no-trim, -m small)
+                # Pass remaining args through to process, such as --no-trim or -m small
                 process_args+=("$1")
                 shift
                 ;;
         esac
     done
+
+    if [ -n "$recent_days" ] && ! [[ "$recent_days" =~ ^[0-9]+$ ]]; then
+        log_error "--recent-days must be a whole number"
+        exit 1
+    fi
+
+    if ! [[ "$min_age_seconds" =~ ^[0-9]+$ ]]; then
+        log_error "--min-age must be a whole number"
+        exit 1
+    fi
+
+    if [ -n "$lock_file" ]; then
+        exec 9>"$lock_file"
+        if ! flock -n 9; then
+            log_info "another catchup run is active"
+            exit 0
+        fi
+    fi
+
+    if [ "$skip_if_active" = true ] && catchup_has_active_process "$active_pattern"; then
+        log_info "hushnote is active, skipping catchup"
+        exit 0
+    fi
 
     if [ ! -d "$OUTPUT_DIR" ]; then
         log_warn "No recordings directory found: $OUTPUT_DIR"
@@ -1144,12 +1247,23 @@ catchup_recordings() {
     fi
 
     local processed=0 hooked=0 failed=0
+    local now
+    now=$(date +%s)
 
     for date_dir in "$OUTPUT_DIR"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]; do
         [ -d "$date_dir" ] || continue
 
         for meeting_dir in "$date_dir"/meeting_*; do
             [ -d "$meeting_dir" ] || continue
+
+            if [ -n "$recent_days" ]; then
+                local meeting_mtime meeting_age_days
+                meeting_mtime=$(stat -c %Y "$meeting_dir")
+                meeting_age_days=$(( (now - meeting_mtime) / 86400 ))
+                if [ "$meeting_age_days" -ge "$recent_days" ]; then
+                    continue
+                fi
+            fi
 
             local base_name
             base_name=$(basename "$meeting_dir")
@@ -1165,22 +1279,36 @@ catchup_recordings() {
             local metadata_file="${base}_metadata.json"
             if [ -f "$metadata_file" ]; then
                 local meta_title
-                meta_title=$(python3 -c "
-import json, sys
+                meta_title=$(python3 - "$metadata_file" <<'PY' 2>/dev/null
+import json
+import sys
+
 try:
-    d = json.load(open('$metadata_file'))
-    print(d.get('title',''))
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        data = json.load(handle)
+    print(data.get("title", ""))
 except Exception:
     pass
-" 2>/dev/null)
+PY
+)
                 [ -n "$meta_title" ] && title="$meta_title"
             fi
 
-            # Case 1: has audio but no summary → needs processing
-            if [ ! -f "$summary_file" ] && ( [ -f "$wav_file" ] || [ -f "$mp3_file" ] ); then
+            # Case 1: has audio but no summary, needs processing
+            if [ ! -f "$summary_file" ] && { [ -f "$wav_file" ] || [ -f "$mp3_file" ]; }; then
                 local audio_file=""
                 [ -f "$wav_file" ] && audio_file="$wav_file"
                 [ -f "$mp3_file" ] && [ -z "$audio_file" ] && audio_file="$mp3_file"
+
+                if [ "$min_age_seconds" -gt 0 ]; then
+                    local audio_mtime audio_age
+                    audio_mtime=$(stat -c %Y "$audio_file")
+                    audio_age=$((now - audio_mtime))
+                    if [ "$audio_age" -lt "$min_age_seconds" ]; then
+                        log_info "[$title] Skipping young recording: $(basename "$audio_file") (${audio_age}s old)"
+                        continue
+                    fi
+                fi
 
                 log_info "[$title] Needs processing: $(basename "$audio_file")"
                 processed=$((processed + 1))
@@ -1204,7 +1332,7 @@ except Exception:
                 fi
             fi
 
-            # Case 2: has summary but hook hasn't run → run hook
+            # Case 2: has summary but hook hasn't run, run hook
             if [ -f "$summary_file" ] && [ ! -f "$hook_done_file" ] && [ -n "$POST_SUMMARY_HOOK" ]; then
                 log_info "[$title] Running post-summary hook..."
 
